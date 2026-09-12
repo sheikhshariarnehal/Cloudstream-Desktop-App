@@ -11,15 +11,16 @@ pub mod videoskip;
 use database::Database;
 use engine::EngineClient;
 use models::{
-    ExtractorLink, ExtensionInfo, HomePageList, LoadResponse, PluginManifest, RepositoryEntry,
-    RepositoryManifest, SearchResponse, SkipInterval, SubtitleData, WatchHistoryItem, WatchlistItem,
+    ExtractorLink, ExtensionInfo, HomePageList, LoadResponse, PluginManifest, ProviderSearchResult,
+    RepositoryEntry, RepositoryManifest, SearchChunkEvent, SearchHistoryItem, SearchMultiResult,
+    SearchResponse, SkipInterval, SubtitleData, WatchHistoryItem, WatchlistItem,
 };
 use plugins::PluginManager;
 use providers::ProviderRegistry;
 use proxy::StreamProxy;
 use std::sync::Arc;
 use subtitles::SubtitleManager;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use videoskip::SkipManager;
 
 pub struct AppState {
@@ -122,6 +123,9 @@ async fn get_home_catalog(
                     score: None,
                     dub_status: None,
                     latest_episode: h.episode_num,
+                    quality: None,
+                    season: h.season_num,
+                    episode: h.episode_num,
                 })
                 .collect();
 
@@ -148,6 +152,390 @@ async fn search_media(
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchResponse>, String> {
     Ok(state.providers.search(&query, provider.as_deref()).await)
+}
+
+#[tauri::command]
+async fn search_media_multi(
+    query: String,
+    providers: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<SearchMultiResult, String> {
+    let q = query.trim();
+    if q.len() <= 1 {
+        return Ok(SearchMultiResult {
+            grouped: Vec::new(),
+            bundled: Vec::new(),
+        });
+    }
+
+    let target_providers: Vec<String> = match providers {
+        Some(list)
+            if !list.is_empty()
+                && !list.contains(&"all".to_string())
+                && !list.contains(&"All".to_string())
+                && !list.contains(&"All Extensions".to_string()) =>
+        {
+            list
+        }
+        _ => {
+            let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+            if !engine_providers.is_empty() {
+                engine_providers.into_iter().map(|p| p.name).collect()
+            } else {
+                state
+                    .plugin_manager
+                    .list_installed_plugins()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.name)
+                    .collect()
+            }
+        }
+    };
+
+    println!(
+        "[search_media_multi] Searching '{}' across {} providers: {:?}",
+        q,
+        target_providers.len(),
+        target_providers
+    );
+
+    let all_items: Vec<SearchResponse> = if !target_providers.is_empty() {
+        let mut handles = Vec::new();
+        for p in target_providers {
+            let providers_ref = state.providers.clone();
+            let q_clone = q.to_string();
+            let p_clone = p.clone();
+            handles.push(tokio::spawn(async move {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(7),
+                    providers_ref.search(&q_clone, Some(&p_clone)),
+                )
+                .await
+                {
+                    Ok(mut items) => {
+                        for it in &mut items {
+                            if it.api_name.trim().is_empty() {
+                                it.api_name = p_clone.clone();
+                            }
+                        }
+                        if !items.is_empty() {
+                            println!(
+                                "[search_media_multi] Provider '{}' returned {} items",
+                                p_clone,
+                                items.len()
+                            );
+                        }
+                        items
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "[search_media_multi] Provider '{}' timed out after 7s",
+                            p_clone
+                        );
+                        Vec::new()
+                    }
+                }
+            }));
+        }
+
+        let mut collected = Vec::new();
+        for handle in handles {
+            if let Ok(res) = handle.await {
+                collected.extend(res);
+            }
+        }
+        collected
+    } else {
+        state.providers.search(q, None).await
+    };
+
+    println!(
+        "[search_media_multi] Total media collected for '{}': {}",
+        q,
+        all_items.len()
+    );
+
+    let mut map: std::collections::BTreeMap<String, Vec<SearchResponse>> = std::collections::BTreeMap::new();
+    for item in all_items {
+        let key = if item.api_name.trim().is_empty() {
+            "Other".to_string()
+        } else {
+            item.api_name.clone()
+        };
+        map.entry(key).or_default().push(item);
+    }
+
+    let mut grouped = Vec::new();
+    for (provider, items) in map {
+        grouped.push(ProviderSearchResult {
+            provider,
+            items,
+            current_page: 1,
+            has_next: false,
+        });
+    }
+
+    // CloudStream Round-Robin interleaving algorithm
+    let mut bundled = Vec::new();
+    let lists: Vec<&[SearchResponse]> = grouped.iter().map(|g| g.items.as_slice()).collect();
+    let mut idx = 0;
+    loop {
+        let mut added = 0;
+        for list in &lists {
+            if list.len() > idx {
+                bundled.push(list[idx].clone());
+                added += 1;
+            }
+        }
+        if added == 0 {
+            break;
+        }
+        idx += 1;
+    }
+
+    Ok(SearchMultiResult { grouped, bundled })
+}
+
+#[tauri::command]
+async fn search_media_stream(
+    app: AppHandle,
+    query: String,
+    providers: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<SearchMultiResult, String> {
+    let q = query.trim().to_string();
+    if q.len() <= 1 {
+        return Ok(SearchMultiResult {
+            grouped: Vec::new(),
+            bundled: Vec::new(),
+        });
+    }
+
+    let target_providers: Vec<String> = match providers {
+        Some(list)
+            if !list.is_empty()
+                && !list.contains(&"all".to_string())
+                && !list.contains(&"All".to_string())
+                && !list.contains(&"All Extensions".to_string()) =>
+        {
+            list
+        }
+        _ => {
+            let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+            if !engine_providers.is_empty() {
+                engine_providers.into_iter().map(|p| p.name).collect()
+            } else {
+                state
+                    .plugin_manager
+                    .list_installed_plugins()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.name)
+                    .collect()
+            }
+        }
+    };
+
+    let total_count = target_providers.len();
+    println!(
+        "[search_media_stream] Streaming search for '{}' across {} providers",
+        q, total_count
+    );
+
+    let completed_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::new();
+
+    for p in target_providers {
+        let providers_ref = state.providers.clone();
+        let q_clone = q.clone();
+        let p_clone = p.clone();
+        let app_clone = app.clone();
+        let counter_clone = completed_counter.clone();
+
+        handles.push(tokio::spawn(async move {
+            let res = tokio::time::timeout(
+                std::time::Duration::from_secs(7),
+                providers_ref.search(&q_clone, Some(&p_clone)),
+            )
+            .await;
+
+            let items = match res {
+                Ok(mut list) => {
+                    // Distinct items by URL within this provider (parity with CloudStream Android)
+                    let mut seen = std::collections::HashSet::new();
+                    list.retain(|it| seen.insert(it.url.clone()));
+                    for it in &mut list {
+                        if it.api_name.trim().is_empty() {
+                            it.api_name = p_clone.clone();
+                        }
+                    }
+                    list
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[search_media_stream] Provider '{}' search timed out after 7s",
+                        p_clone
+                    );
+                    Vec::new()
+                }
+            };
+
+            let completed = counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let is_done = completed >= total_count;
+
+            // Immediately emit progressive chunk to frontend
+            let chunk = SearchChunkEvent {
+                query: q_clone,
+                provider: p_clone,
+                items: items.clone(),
+                completed_count: completed,
+                total_count,
+                is_done,
+            };
+            let _ = app_clone.emit("search://chunk", chunk);
+
+            items
+        }));
+    }
+
+    let mut all_items: Vec<SearchResponse> = Vec::new();
+    for handle in handles {
+        if let Ok(res) = handle.await {
+            all_items.extend(res);
+        }
+    }
+
+    let mut map: std::collections::BTreeMap<String, Vec<SearchResponse>> = std::collections::BTreeMap::new();
+    for item in all_items {
+        let key = if item.api_name.trim().is_empty() {
+            "Other".to_string()
+        } else {
+            item.api_name.clone()
+        };
+        map.entry(key).or_default().push(item);
+    }
+
+    let mut grouped = Vec::new();
+    for (provider, items) in map {
+        grouped.push(ProviderSearchResult {
+            provider,
+            items,
+            current_page: 1,
+            has_next: false,
+        });
+    }
+
+    // CloudStream Round-Robin interleaving algorithm with cross-provider URL deduplication
+    let mut bundled = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+    let lists: Vec<&[SearchResponse]> = grouped.iter().map(|g| g.items.as_slice()).collect();
+    let mut idx = 0;
+    loop {
+        let mut added = 0;
+        for list in &lists {
+            if list.len() > idx {
+                let item = &list[idx];
+                if seen_urls.insert(item.url.clone()) {
+                    bundled.push(item.clone());
+                }
+                added += 1;
+            }
+        }
+        if added == 0 {
+            break;
+        }
+        idx += 1;
+    }
+
+    let _ = app.emit(
+        "search://complete",
+        serde_json::json!({
+            "query": q,
+            "total_items": bundled.len(),
+            "total_providers": grouped.len(),
+        }),
+    );
+
+    Ok(SearchMultiResult { grouped, bundled })
+}
+
+#[tauri::command]
+async fn get_search_suggestions(query: String) -> Result<Vec<String>, String> {
+    let q = query.trim();
+    if q.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2000))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "https://api.themoviedb.org/3/search/multi?api_key=e6333b32409e02a4a6eba6fb7ff866bb&query={}&language=en-US",
+        urlencoding::encode(q)
+    );
+
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let json: serde_json::Value = resp.json().await.unwrap_or_default();
+    let mut suggestions = Vec::new();
+
+    if let Some(results) = json.get("results").and_then(|r| r.as_array()) {
+        for item in results {
+            let media_type = item.get("media_type").and_then(|m| m.as_str()).unwrap_or_default();
+            if media_type == "movie" || media_type == "tv" {
+                let title = item.get("title").or_else(|| item.get("name"))
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.trim().to_string());
+                if let Some(t) = title {
+                    if !t.is_empty() && !suggestions.contains(&t) {
+                        suggestions.push(t);
+                        if suggestions.len() >= 10 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(suggestions)
+}
+
+#[tauri::command]
+async fn get_search_history(
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchHistoryItem>, String> {
+    state.db.get_search_history(limit.unwrap_or(20)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_search_history(
+    item: SearchHistoryItem,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.db.add_search_history(&item).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_search_history_item(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.db.remove_search_history_item(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn clear_search_history(state: State<'_, AppState>) -> Result<(), String> {
+    state.db.clear_search_history().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -465,6 +853,17 @@ async fn player_get_tracks(state: State<'_, AppState>) -> Result<serde_json::Val
     state.player.get_tracks()
 }
 
+#[tauri::command]
+async fn player_set_preferred_languages(
+    slang: Option<String>,
+    alang: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .player
+        .set_preferred_languages(slang.as_deref(), alang.as_deref())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -501,6 +900,9 @@ pub fn run() {
                 Ok(h) => {
                     let val = (h.0 as usize) as i64;
                     println!("[Player] main_window.hwnd() succeeded: {:?}, raw i64: {}", h, val);
+                    unsafe {
+                        apply_window_theme(val);
+                    }
                     val
                 }
                 Err(e) => {
@@ -533,6 +935,13 @@ pub fn run() {
             get_available_extensions,
             get_home_catalog,
             search_media,
+            search_media_multi,
+            search_media_stream,
+            get_search_suggestions,
+            add_search_history,
+            get_search_history,
+            remove_search_history_item,
+            clear_search_history,
             load_media,
             load_links,
             save_watch_progress,
@@ -571,8 +980,56 @@ pub fn run() {
             player_set_panscan,
             player_add_subtitle,
             player_get_tracks,
+            player_set_preferred_languages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(windows)]
+unsafe fn apply_window_theme(hwnd_val: i64) {
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: *mut std::ffi::c_void,
+            dwAttribute: u32,
+            pvAttribute: *const std::ffi::c_void,
+            cbAttribute: u32,
+        ) -> i32;
+    }
+
+    if hwnd_val == 0 {
+        return;
+    }
+
+    let hwnd_ptr = hwnd_val as usize as *mut std::ffi::c_void;
+
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+    let dark_mode: i32 = 1;
+    let _ = DwmSetWindowAttribute(
+        hwnd_ptr,
+        20,
+        &dark_mode as *const _ as *const std::ffi::c_void,
+        std::mem::size_of::<i32>() as u32,
+    );
+
+    // DWMWA_CAPTION_COLOR = 35 (COLORREF format: 0x00BBGGRR)
+    // Blend with Stremio top edge #19173A => RGB(25, 23, 58) => B=0x3A, G=0x17, R=0x19
+    let caption_color: u32 = 0x003A1719;
+    let _ = DwmSetWindowAttribute(
+        hwnd_ptr,
+        35,
+        &caption_color as *const _ as *const std::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    );
+
+    // DWMWA_TEXT_COLOR = 36 (White / light lavender)
+    let text_color: u32 = 0x00f8f8f8;
+    let _ = DwmSetWindowAttribute(
+        hwnd_ptr,
+        36,
+        &text_color as *const _ as *const std::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    );
 }
 

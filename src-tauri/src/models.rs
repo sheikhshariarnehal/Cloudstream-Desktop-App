@@ -37,6 +37,46 @@ pub struct SearchResponse {
     pub score: Option<f64>,
     pub dub_status: Option<DubStatus>,
     pub latest_episode: Option<i32>,
+    #[serde(default)]
+    pub quality: Option<String>,
+    #[serde(default)]
+    pub season: Option<i32>,
+    #[serde(default)]
+    pub episode: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHistoryItem {
+    pub id: Option<i64>,
+    pub search_text: String,
+    pub searched_at: i64,
+    #[serde(default)]
+    pub types: Vec<TvType>,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSearchResult {
+    pub provider: String,
+    pub items: Vec<SearchResponse>,
+    pub current_page: u32,
+    pub has_next: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMultiResult {
+    pub grouped: Vec<ProviderSearchResult>,
+    pub bundled: Vec<SearchResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchChunkEvent {
+    pub query: String,
+    pub provider: String,
+    pub items: Vec<SearchResponse>,
+    pub completed_count: usize,
+    pub total_count: usize,
+    pub is_done: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -15,8 +15,13 @@ import { MediaCard } from './components/MediaCard';
 import { DetailModal } from './components/DetailModal';
 import { PlayerOverlay } from './components/PlayerOverlay';
 import { PluginsScreen } from './screens/PluginsScreen';
+import { SearchScreen } from './screens/SearchScreen';
+import { SearchSuggestionsDropdown } from './components/search/SearchSuggestionsDropdown';
+import { SearchFilterDropdown } from './components/search/SearchFilterDropdown';
+import { useSearchEngine } from './hooks/useSearchEngine';
 import { ExpandedShelfModal } from './components/ExpandedShelfModal';
 import { MediaShelf } from './components/MediaShelf';
+import { HeroBanner } from './components/HeroBanner';
 import {
   Search,
   ChevronDown,
@@ -32,11 +37,15 @@ import {
   RefreshCw,
   Trash2,
   Pin,
+  Loader2,
+  X,
+  SlidersHorizontal,
 } from 'lucide-react';
 import './App.css';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
+  const [sourceFilterDropdownOpen, setSourceFilterDropdownOpen] = useState(false);
   const [catalog, setCatalog] = useState<HomePageList[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -77,6 +86,7 @@ export const App: React.FC = () => {
   };
 
   // Home Filters & Shelf Expansion
+  const [boardCategory, setBoardCategory] = useState<'All' | 'Movies' | 'Series' | 'Anime'>('All');
   const [bookmarkFilter, setBookmarkFilter] = useState<WatchStatusFilter>('all');
   const [expandedShelf, setExpandedShelf] = useState<{
     title: string;
@@ -84,12 +94,26 @@ export const App: React.FC = () => {
     actionType?: 'continue_watching' | 'watchlist' | 'provider';
   } | null>(null);
 
-  // Search state (Stremio centered search)
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchExtension] = useState('all');
-  const [searchResults, setSearchResults] = useState<SearchResponse[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchFilter, setSearchFilter] = useState<'All' | 'Movie' | 'TvSeries' | 'Anime'>('All');
+  // Search state powered by CloudStream Search Engine
+  const searchEngine = useSearchEngine();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchBoxWrapperRef = useRef<HTMLDivElement>(null);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [discoverFilter, setDiscoverFilter] = useState<'All' | 'Movie' | 'TvSeries' | 'Anime'>('All');
+
+  // Close search and sources dropdowns on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchBoxWrapperRef.current && !searchBoxWrapperRef.current.contains(e.target as Node)) {
+        setIsSearchFocused(false);
+        searchEngine.setShowSuggestions(false);
+        setSourceFilterDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [searchEngine]);
 
   // Library state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
@@ -128,6 +152,36 @@ export const App: React.FC = () => {
     }
   };
 
+  // Toggle watchlist for an item (Stremio parity)
+  const handleToggleWatchlist = async (media: SearchResponse) => {
+    try {
+      const isWatchlisted = watchlist.some((w) => w.media_id === media.url);
+      if (isWatchlisted) {
+        await invoke('remove_watchlist_item', { mediaId: media.url });
+      } else {
+        await invoke('set_watchlist_item', {
+          item: {
+            media_id: media.url,
+            provider_id: media.api_name,
+            title: media.name,
+            poster_url: media.poster_url,
+            tv_type: media.tv_type,
+            status: 'watching',
+            score: media.score,
+            added_at: Date.now(),
+          },
+        });
+      }
+      await loadLibraryData();
+    } catch (e) {
+      console.error('Watchlist toggle error:', e);
+    }
+  };
+
+  const isInWatchlist = (media: SearchResponse) => {
+    return watchlist.some((w) => w.media_id === media.url);
+  };
+
   // Clear Watch History (CloudStream deleteResumeWatching parity)
   const handleClearHistory = async () => {
     try {
@@ -162,16 +216,20 @@ export const App: React.FC = () => {
     }
   };
 
-  // Close dropdown on click outside
+  // Close dropdowns on click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowExtensionDropdown(false);
       }
+      if (searchBoxWrapperRef.current && !searchBoxWrapperRef.current.contains(event.target as Node)) {
+        searchEngine.setShowSuggestions(false);
+        setSelectedSuggestionIndex(-1);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [searchEngine]);
 
   useEffect(() => {
     loadExtensions();
@@ -191,42 +249,70 @@ export const App: React.FC = () => {
     loadHome(extName);
   };
 
-  // Search with debounce
+  // Global Hotkeys for Search
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
-      if (activeTab === 'search') {
-        setActiveTab('home');
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (
+        (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA') ||
+        (e.ctrlKey && e.key.toLowerCase() === 'f')
+      ) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        setActiveTab('search');
+      } else if (e.key === 'Escape') {
+        searchEngine.setShowSuggestions(false);
       }
-      return;
-    }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchEngine]);
 
-    if (activeTab !== 'search') {
-      setActiveTab('search');
-    }
-
-    const timer = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const res: SearchResponse[] = await invoke('search_media', {
-          query: searchQuery.trim(),
-          provider: searchExtension === 'all' || searchExtension === 'All Extensions' ? null : searchExtension,
-        });
-        setSearchResults(res);
-      } catch (e) {
-        console.error('Search error:', e);
-      } finally {
-        setSearching(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, searchExtension]);
-
-  // Handle direct link paste in search bar
+  // Handle direct link paste in search bar or Enter to search with keyboard arrow navigation
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (searchEngine.showSuggestions && searchEngine.suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestionIndex((prev) =>
+          prev < searchEngine.suggestions.length - 1 ? prev + 1 : 0
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestionIndex((prev) =>
+          prev > 0 ? prev - 1 : searchEngine.suggestions.length - 1
+        );
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        searchEngine.setShowSuggestions(false);
+        setSelectedSuggestionIndex(-1);
+        return;
+      }
+    }
+
     if (e.key === 'Enter') {
-      const val = searchQuery.trim();
+      if (
+        searchEngine.showSuggestions &&
+        selectedSuggestionIndex >= 0 &&
+        selectedSuggestionIndex < searchEngine.suggestions.length
+      ) {
+        e.preventDefault();
+        const selected = searchEngine.suggestions[selectedSuggestionIndex];
+        searchEngine.setShowSuggestions(false);
+        setSelectedSuggestionIndex(-1);
+        searchEngine.setSearchQuery(selected);
+        searchEngine.executeSearch(selected);
+        setActiveTab('search');
+        return;
+      }
+
+      searchEngine.setShowSuggestions(false);
+      setSelectedSuggestionIndex(-1);
+
+      const val = searchEngine.searchQuery.trim();
       if (val.startsWith('http://') || val.startsWith('https://')) {
         // Direct stream playback
         const isM3u8 = val.includes('.m3u8');
@@ -261,6 +347,12 @@ export const App: React.FC = () => {
             },
           ],
         });
+        return;
+      }
+
+      if (val.length > 0) {
+        searchEngine.executeSearch(val);
+        setActiveTab('search');
       }
     }
   };
@@ -285,14 +377,6 @@ export const App: React.FC = () => {
         .catch(console.error);
     }
   }, [activeTab]);
-
-  const filteredSearchResults = searchResults.filter((r) => {
-    if (searchFilter === 'All') return true;
-    if (searchFilter === 'Movie') return r.tv_type === 'Movie' || r.tv_type === 'AnimeMovie';
-    if (searchFilter === 'TvSeries') return r.tv_type === 'TvSeries' || r.tv_type === 'AsianDrama';
-    if (searchFilter === 'Anime') return r.tv_type === 'Anime' || r.tv_type === 'AnimeMovie';
-    return true;
-  });
 
   // Continue Watching items computed from history
   const continueWatchingItems: SearchResponse[] = history
@@ -341,6 +425,37 @@ export const App: React.FC = () => {
 
   // Provider Shelves
   const filteredShelves = catalog.filter((s) => s.name !== 'Continue Watching');
+
+  // Stremio Hero Spotlight items
+  const heroBannerItems = React.useMemo(() => {
+    const items: SearchResponse[] = [];
+    for (const shelf of catalog) {
+      for (const item of shelf.list) {
+        if (item.poster_url && !items.some((existing) => existing.url === item.url)) {
+          items.push(item);
+        }
+        if (items.length >= 8) break;
+      }
+      if (items.length >= 8) break;
+    }
+    return items;
+  }, [catalog]);
+
+  // Filter shelves based on board category
+  const visibleShelves = filteredShelves.filter((shelf) => {
+    if (boardCategory === 'All') return true;
+    const lower = shelf.name.toLowerCase();
+    if (boardCategory === 'Movies') {
+      return lower.includes('movie') || shelf.list.some((it) => it.tv_type === 'Movie');
+    }
+    if (boardCategory === 'Series') {
+      return lower.includes('series') || lower.includes('show') || shelf.list.some((it) => it.tv_type === 'TvSeries');
+    }
+    if (boardCategory === 'Anime') {
+      return lower.includes('anime') || shelf.list.some((it) => it.tv_type === 'Anime');
+    }
+    return true;
+  });
 
   const currentExtObj = extensions.find(
     (e) => e.name === selectedExtension || (selectedExtension === 'all' && e.id === 'all')
@@ -407,29 +522,153 @@ export const App: React.FC = () => {
         {/* Top Header Bar (Stremio Exact) */}
         <header className="stremio-header">
           <div className="stremio-header-left">
-            <div
-              className="stremio-brand-text"
-              style={{ cursor: 'pointer' }}
-              onClick={() => {
-                setActiveTab('home');
-                setSearchQuery('');
-              }}
-            >
-              <span>CloudStream</span>
-            </div>
+            {/* Empty or subtle navigation space matching Stremio header spacing */}
           </div>
 
-          {/* Centered Stremio Search Bar */}
-          <div className="stremio-search-box">
-            <input
-              type="text"
-              className="stremio-search-input"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Search or paste link"
-            />
-            <Search size={16} color="#8b88a8" style={{ marginLeft: '8px', cursor: 'pointer' }} />
+          {/* Centered Stremio Search Bar with TMDB Live Suggestions */}
+          <div
+            className="stremio-search-box-wrapper"
+            ref={searchBoxWrapperRef}
+            style={{ position: 'relative' }}
+          >
+            <div className="stremio-search-box">
+              <Search
+                size={17}
+                color="#8e8aa4"
+                strokeWidth={2.1}
+                style={{ marginRight: '10px', cursor: 'pointer', flexShrink: 0, opacity: 0.85 }}
+                onClick={() => {
+                  if (searchEngine.searchQuery.trim()) {
+                    searchEngine.setShowSuggestions(false);
+                    setSelectedSuggestionIndex(-1);
+                    searchEngine.executeSearch();
+                    setActiveTab('search');
+                  } else {
+                    searchInputRef.current?.focus();
+                  }
+                }}
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                className="stremio-search-input"
+                value={searchEngine.searchQuery}
+                onChange={(e) => {
+                  searchEngine.setSearchQuery(e.target.value);
+                  setSelectedSuggestionIndex(-1);
+                  setIsSearchFocused(true);
+                  if (activeTab !== 'search') {
+                    setActiveTab('search');
+                  }
+                }}
+                onFocus={() => {
+                  setIsSearchFocused(true);
+                  if (searchEngine.suggestions.length > 0 && searchEngine.searchQuery.trim().length >= 2) {
+                    searchEngine.setShowSuggestions(true);
+                  }
+                }}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Search or paste link"
+              />
+
+              <div className="stremio-search-right-actions">
+                {searchEngine.searching && (
+                  <Loader2
+                    size={17}
+                    className="animate-spin stremio-search-spinner"
+                  />
+                )}
+
+                {searchEngine.searchQuery.trim().length > 0 && (
+                  <button
+                    type="button"
+                    className="stremio-search-clear-btn"
+                    title="Clear search"
+                    onClick={() => {
+                      searchEngine.setSearchQuery('');
+                      searchEngine.setShowSuggestions(false);
+                      setSelectedSuggestionIndex(-1);
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    <X
+                      size={16}
+                      color="#8e8aa4"
+                      strokeWidth={2}
+                    />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className={`stremio-search-sources-btn ${searchEngine.selectedProviders.length > 0 ? 'active' : ''}`}
+                  title="Filter Sources"
+                  onClick={() => {
+                    searchEngine.setShowSuggestions(false);
+                    setSourceFilterDropdownOpen((prev) => !prev);
+                  }}
+                >
+                  <SlidersHorizontal size={17} strokeWidth={2.1} />
+                  {searchEngine.selectedProviders.length > 0 && (
+                    <span className="stremio-search-sources-dot" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Live TMDB Suggestions Dropdown (when typing >= 2 chars) */}
+            {!sourceFilterDropdownOpen && isSearchFocused && searchEngine.searchQuery.trim().length >= 2 && searchEngine.suggestions.length > 0 && (
+              <SearchSuggestionsDropdown
+                title="Search Suggestions"
+                items={searchEngine.suggestions}
+                selectedIndex={selectedSuggestionIndex}
+                onHoverIndex={setSelectedSuggestionIndex}
+                onSelect={(suggestion) => {
+                  setIsSearchFocused(false);
+                  searchEngine.setShowSuggestions(false);
+                  setSelectedSuggestionIndex(-1);
+                  searchEngine.setSearchQuery(suggestion);
+                  searchEngine.executeSearch(suggestion);
+                  setActiveTab('search');
+                }}
+              />
+            )}
+
+            {/* Search History Dropdown (when query is empty or short) */}
+            {!sourceFilterDropdownOpen && isSearchFocused && searchEngine.searchQuery.trim().length < 2 && searchEngine.history.length > 0 && (
+              <SearchSuggestionsDropdown
+                title="Search History"
+                items={searchEngine.history.map((h) => h.search_text)}
+                selectedIndex={selectedSuggestionIndex}
+                onHoverIndex={setSelectedSuggestionIndex}
+                onClearHistory={() => {
+                  searchEngine.clearAllHistory();
+                }}
+                onSelect={(item) => {
+                  setIsSearchFocused(false);
+                  searchEngine.setShowSuggestions(false);
+                  setSelectedSuggestionIndex(-1);
+                  searchEngine.setSearchQuery(item);
+                  searchEngine.executeSearch(item);
+                  setActiveTab('search');
+                }}
+              />
+            )}
+
+            {/* Sources Filter Dropdown */}
+            {sourceFilterDropdownOpen && (
+              <SearchFilterDropdown
+                extensions={extensions}
+                selectedProviders={searchEngine.selectedProviders}
+                onClose={() => setSourceFilterDropdownOpen(false)}
+                onApply={(providers: string[]) => {
+                  searchEngine.setSelectedProviders(providers);
+                  if (searchEngine.lastSearchedQuery.length > 0) {
+                    searchEngine.executeSearch();
+                  }
+                }}
+              />
+            )}
           </div>
 
           {/* Header Right Actions */}
@@ -441,11 +680,11 @@ export const App: React.FC = () => {
                 onClick={() => setShowExtensionDropdown(!showExtensionDropdown)}
                 title="Select or switch active CloudStream extension"
               >
-                <Puzzle size={13} color="var(--stremio-purple-light)" />
+                <Puzzle size={14} color="var(--stremio-purple-light)" />
                 <span className="stremio-ext-badge-text">
                   {currentExtObj?.name || (selectedExtension === 'all' ? 'All Extensions' : selectedExtension)}
                 </span>
-                <ChevronDown size={13} color="#94a3b8" />
+                <ChevronDown size={13} color="#8e8aa4" />
               </div>
 
               {/* Extension Dropdown Menu (CloudStream home_select_mainpage Parity) */}
@@ -454,7 +693,7 @@ export const App: React.FC = () => {
                   <div className="ext-dropdown-header">
                     <div className="ext-dropdown-title">
                       <span>Source Extensions</span>
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      <span style={{ fontSize: '11.5px', color: '#8e8aa4', fontWeight: 500 }}>
                         {sortedDropdownExts.filter((e) => e.id !== 'all').length} available
                       </span>
                     </div>
@@ -482,14 +721,13 @@ export const App: React.FC = () => {
                                 toggleTvTypeFilter(type);
                               }}
                               style={{
-                                padding: '3px 9px',
+                                padding: '4px 10px',
                                 borderRadius: '9999px',
                                 fontSize: '11px',
                                 fontWeight: 600,
-                                border: '1px solid',
-                                borderColor: active ? 'var(--stremio-purple-light)' : 'rgba(255, 255, 255, 0.1)',
-                                background: active ? 'rgba(124, 58, 237, 0.3)' : 'rgba(255, 255, 255, 0.04)',
-                                color: active ? '#fff' : '#94a3b8',
+                                border: 'none',
+                                background: active ? 'rgba(124, 58, 237, 0.35)' : 'rgba(255, 255, 255, 0.05)',
+                                color: active ? '#fff' : '#8e8aa4',
                                 cursor: 'pointer',
                                 whiteSpace: 'nowrap',
                                 transition: 'all 0.15s ease',
@@ -526,8 +764,8 @@ export const App: React.FC = () => {
                               {ext.name}
                             </span>
                             {ext.version && (
-                              <span style={{ fontSize: '10px', color: '#64748b', background: 'rgba(255,255,255,0.05)', padding: '1px 5px', borderRadius: '4px' }}>
-                                {ext.version}
+                              <span style={{ fontSize: '10px', color: '#726e8c' }}>
+                                v{ext.version}
                               </span>
                             )}
                           </div>
@@ -543,7 +781,7 @@ export const App: React.FC = () => {
                                   border: 'none',
                                   cursor: 'pointer',
                                   padding: '2px',
-                                  color: isPinned ? 'var(--stremio-purple-light)' : '#475569',
+                                  color: isPinned ? 'var(--stremio-purple-light)' : '#555175',
                                   display: 'flex',
                                   alignItems: 'center',
                                   transition: 'color 0.15s ease',
@@ -561,15 +799,25 @@ export const App: React.FC = () => {
 
                   <div className="ext-dropdown-footer">
                     <button
+                      type="button"
                       className="btn-secondary"
-                      style={{ width: '100%', fontSize: '12px', padding: '6px 12px', justifyContent: 'center' }}
+                      style={{
+                        width: '100%',
+                        fontSize: '12.5px',
+                        padding: '9px 16px',
+                        borderRadius: '9999px',
+                        border: 'none',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        justifyContent: 'center',
+                        gap: '6px',
+                      }}
                       onClick={() => {
                         setShowExtensionDropdown(false);
                         setActiveTab('plugins');
                       }}
                     >
-                      <Plus size={13} />
-                      Extension Manager
+                      <Plus size={14} />
+                      <span>Extension Manager</span>
                     </button>
                   </div>
                 </div>
@@ -591,9 +839,12 @@ export const App: React.FC = () => {
               <Maximize2 size={16} />
             </button>
 
-            {/* User Avatar Circle */}
-            <div className="stremio-avatar" title="Profile">
-              N
+            {/* User Avatar Circle with Dropdown Arrow (Stremio Exact) */}
+            <div className="stremio-avatar-group" title="Profile">
+              <div className="stremio-avatar">
+                N
+              </div>
+              <ChevronDown size={13} color="#8e8aa4" />
             </div>
           </div>
         </header>
@@ -690,126 +941,163 @@ export const App: React.FC = () => {
                 </div>
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
-                <div className="stremio-board-container">
-                  {/* 1. Continue Watching Shelf (Top Shelf - CloudStream getResumeWatching Parity) */}
-                  {continueWatchingItems.length > 0 && (
-                    <MediaShelf
-                      title="Continue Watching"
-                      items={continueWatchingItems}
-                      progressMap={historyProgressMap}
+                <div>
+                  {/* Stremio Hero Spotlight Carousel */}
+                  {heroBannerItems.length > 0 && (
+                    <HeroBanner
+                      items={heroBannerItems}
                       onSelectItem={setSelectedItem}
-                      onSeeAll={() =>
-                        setExpandedShelf({
-                          title: 'Continue Watching',
-                          items: continueWatchingItems,
-                          actionType: 'continue_watching',
-                        })
-                      }
-                      subactions={
-                        <button
-                          className="stremio-clear-btn"
-                          onClick={() => {
-                            if (window.confirm('Are you sure you want to clear all Continue Watching history?')) {
-                              handleClearHistory();
-                            }
-                          }}
-                          title="Clear Continue Watching history"
-                        >
-                          <Trash2 size={13} />
-                          <span>Clear</span>
-                        </button>
-                      }
+                      onToggleWatchlist={handleToggleWatchlist}
+                      isInWatchlist={isInWatchlist}
                     />
                   )}
 
-                  {/* 2. My Library / Bookmarks Shelf (CloudStream loadStoredData Parity) */}
-                  {watchlist.length > 0 && (
-                    <MediaShelf
-                      title="My Library"
-                      items={bookmarkSearchItems}
-                      onSelectItem={setSelectedItem}
-                      onSeeAll={() =>
-                        setExpandedShelf({
-                          title: `My Library (${bookmarkFilter === 'all' ? 'All' : bookmarkFilter.replace('_', ' ')})`,
-                          items: bookmarkSearchItems,
-                          actionType: 'watchlist',
-                        })
-                      }
-                      subactions={
-                        <div className="stremio-chips-row">
+                  {/* Stremio Board Quick Category Filter Pills */}
+                  <div className="stremio-category-bar">
+                    {(['All', 'Movies', 'Series', 'Anime'] as const).map((cat) => (
+                      <button
+                        key={cat}
+                        className={`stremio-category-pill ${boardCategory === cat ? 'active' : ''}`}
+                        onClick={() => setBoardCategory(cat)}
+                      >
+                        {cat === 'All' && <Film size={13} />}
+                        {cat === 'Movies' && <Film size={13} />}
+                        {cat === 'Series' && <Calendar size={13} />}
+                        {cat === 'Anime' && <Folder size={13} />}
+                        <span>{cat === 'All' ? 'All Titles' : cat}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="stremio-board-container">
+                    {/* 1. Continue Watching Shelf (Top Shelf - CloudStream getResumeWatching Parity) */}
+                    {(boardCategory === 'All' || boardCategory === 'Series') && continueWatchingItems.length > 0 && (
+                      <MediaShelf
+                        title="Continue Watching"
+                        items={continueWatchingItems}
+                        progressMap={historyProgressMap}
+                        onSelectItem={setSelectedItem}
+                        onSeeAll={() =>
+                          setExpandedShelf({
+                            title: 'Continue Watching',
+                            items: continueWatchingItems,
+                            actionType: 'continue_watching',
+                          })
+                        }
+                        subactions={
                           <button
-                            className={`stremio-chip-pill ${bookmarkFilter === 'all' ? 'active' : ''}`}
-                            onClick={() => setBookmarkFilter('all')}
+                            className="stremio-clear-btn"
+                            onClick={() => {
+                              if (window.confirm('Are you sure you want to clear all Continue Watching history?')) {
+                                handleClearHistory();
+                              }
+                            }}
+                            title="Clear Continue Watching history"
                           >
-                            All ({watchlist.length})
+                            <Trash2 size={13} />
+                            <span>Clear</span>
                           </button>
-                          {statusCounts.watching > 0 && (
-                            <button
-                              className={`stremio-chip-pill ${bookmarkFilter === 'watching' ? 'active' : ''}`}
-                              onClick={() => setBookmarkFilter('watching')}
-                            >
-                              Watching ({statusCounts.watching})
-                            </button>
-                          )}
-                          {statusCounts.plan_to_watch > 0 && (
-                            <button
-                              className={`stremio-chip-pill ${bookmarkFilter === 'plan_to_watch' ? 'active' : ''}`}
-                              onClick={() => setBookmarkFilter('plan_to_watch')}
-                            >
-                              Plan to Watch ({statusCounts.plan_to_watch})
-                            </button>
-                          )}
-                          {statusCounts.completed > 0 && (
-                            <button
-                              className={`stremio-chip-pill ${bookmarkFilter === 'completed' ? 'active' : ''}`}
-                              onClick={() => setBookmarkFilter('completed')}
-                            >
-                              Completed ({statusCounts.completed})
-                            </button>
-                          )}
-                          {statusCounts.on_hold > 0 && (
-                            <button
-                              className={`stremio-chip-pill ${bookmarkFilter === 'on_hold' ? 'active' : ''}`}
-                              onClick={() => setBookmarkFilter('on_hold')}
-                            >
-                              On Hold ({statusCounts.on_hold})
-                            </button>
-                          )}
-                          {statusCounts.dropped > 0 && (
-                            <button
-                              className={`stremio-chip-pill ${bookmarkFilter === 'dropped' ? 'active' : ''}`}
-                              onClick={() => setBookmarkFilter('dropped')}
-                            >
-                              Dropped ({statusCounts.dropped})
-                            </button>
-                          )}
-                        </div>
-                      }
-                    />
-                  )}
+                        }
+                      />
+                    )}
 
-                  {/* 3. Provider Shelves (8-Card Carousels with < and > Nav) */}
-                  {filteredShelves.map((shelf) => (
-                    <MediaShelf
-                      key={shelf.name}
-                      title={
-                        shelf.name.includes('Movie')
-                          ? `Popular - ${shelf.name}`
-                          : shelf.name.includes('Series')
-                          ? `Popular - ${shelf.name}`
-                          : shelf.name
+                    {/* 2. My Library / Bookmarks Shelf (CloudStream loadStoredData Parity) */}
+                    {boardCategory === 'All' && watchlist.length > 0 && (
+                      <MediaShelf
+                        title="My Library"
+                        items={bookmarkSearchItems}
+                        onSelectItem={setSelectedItem}
+                        onSeeAll={() =>
+                          setExpandedShelf({
+                            title: `My Library (${bookmarkFilter === 'all' ? 'All' : bookmarkFilter.replace('_', ' ')})`,
+                            items: bookmarkSearchItems,
+                            actionType: 'watchlist',
+                          })
+                        }
+                        subactions={
+                          <div className="stremio-chips-row">
+                            <button
+                              className={`stremio-chip-pill ${bookmarkFilter === 'all' ? 'active' : ''}`}
+                              onClick={() => setBookmarkFilter('all')}
+                            >
+                              All ({watchlist.length})
+                            </button>
+                            {statusCounts.watching > 0 && (
+                              <button
+                                className={`stremio-chip-pill ${bookmarkFilter === 'watching' ? 'active' : ''}`}
+                                onClick={() => setBookmarkFilter('watching')}
+                              >
+                                Watching ({statusCounts.watching})
+                              </button>
+                            )}
+                            {statusCounts.plan_to_watch > 0 && (
+                              <button
+                                className={`stremio-chip-pill ${bookmarkFilter === 'plan_to_watch' ? 'active' : ''}`}
+                                onClick={() => setBookmarkFilter('plan_to_watch')}
+                              >
+                                Plan to Watch ({statusCounts.plan_to_watch})
+                              </button>
+                            )}
+                            {statusCounts.completed > 0 && (
+                              <button
+                                className={`stremio-chip-pill ${bookmarkFilter === 'completed' ? 'active' : ''}`}
+                                onClick={() => setBookmarkFilter('completed')}
+                              >
+                                Completed ({statusCounts.completed})
+                              </button>
+                            )}
+                            {statusCounts.on_hold > 0 && (
+                              <button
+                                className={`stremio-chip-pill ${bookmarkFilter === 'on_hold' ? 'active' : ''}`}
+                                onClick={() => setBookmarkFilter('on_hold')}
+                              >
+                                On Hold ({statusCounts.on_hold})
+                              </button>
+                            )}
+                            {statusCounts.dropped > 0 && (
+                              <button
+                                className={`stremio-chip-pill ${bookmarkFilter === 'dropped' ? 'active' : ''}`}
+                                onClick={() => setBookmarkFilter('dropped')}
+                              >
+                                Dropped ({statusCounts.dropped})
+                              </button>
+                            )}
+                          </div>
+                        }
+                      />
+                    )}
+
+                    {/* 3. Provider Shelves (8-Card Carousels with < and > Nav) */}
+                    {visibleShelves.map((shelf) => {
+                      const lower = shelf.name.toLowerCase();
+                      let displayTitle = shelf.name;
+                      if (lower.includes('movie')) {
+                        displayTitle = 'Popular - Movie';
+                      } else if (lower.includes('series') || lower.includes('tv') || lower.includes('show')) {
+                        displayTitle = 'Popular - Series';
+                      } else if (lower.includes('anime')) {
+                        displayTitle = 'Popular - Anime';
+                      } else if (!lower.startsWith('popular')) {
+                        displayTitle = `Popular - ${shelf.name}`;
                       }
-                      items={shelf.list}
-                      onSelectItem={setSelectedItem}
-                      onSeeAll={() =>
-                        setExpandedShelf({
-                          title: shelf.name,
-                          items: shelf.list,
-                          actionType: 'provider',
-                        })
-                      }
-                    />
-                  ))}
+
+                      return (
+                        <MediaShelf
+                          key={shelf.name}
+                          title={displayTitle}
+                          items={shelf.list}
+                          onSelectItem={setSelectedItem}
+                          onSeeAll={() =>
+                            setExpandedShelf({
+                              title: displayTitle,
+                              items: shelf.list,
+                              actionType: 'provider',
+                            })
+                          }
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -824,8 +1112,8 @@ export const App: React.FC = () => {
                   {['All', 'Movie', 'TvSeries', 'Anime'].map((t) => (
                     <button
                       key={t}
-                      className={`stremio-filter-pill ${searchFilter === t ? 'active' : ''}`}
-                      onClick={() => setSearchFilter(t as any)}
+                      className={`stremio-filter-pill ${discoverFilter === t ? 'active' : ''}`}
+                      onClick={() => setDiscoverFilter(t as any)}
                     >
                       {t === 'All' ? 'All Types' : t === 'TvSeries' ? 'Series' : t}
                     </button>
@@ -838,10 +1126,10 @@ export const App: React.FC = () => {
                   .flatMap((s) => s.list)
                   .filter((m, idx, self) => self.findIndex((o) => o.url === m.url) === idx)
                   .filter((m) => {
-                    if (searchFilter === 'All') return true;
-                    if (searchFilter === 'Movie') return m.tv_type === 'Movie';
-                    if (searchFilter === 'TvSeries') return m.tv_type === 'TvSeries';
-                    if (searchFilter === 'Anime') return m.tv_type === 'Anime';
+                    if (discoverFilter === 'All') return true;
+                    if (discoverFilter === 'Movie') return m.tv_type === 'Movie';
+                    if (discoverFilter === 'TvSeries') return m.tv_type === 'TvSeries';
+                    if (discoverFilter === 'Anime') return m.tv_type === 'Anime';
                     return true;
                   })
                   .map((media) => (
@@ -851,53 +1139,13 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* SEARCH SCREEN */}
+          {/* SEARCH SCREEN (CloudStream Dual-Mode Search Engine) */}
           {activeTab === 'search' && (
-            <div style={{ padding: '24px 36px 60px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
-                <div>
-                  <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#fff' }}>
-                    Results for "{searchQuery}"
-                  </h1>
-                  <span style={{ fontSize: '13px', color: '#94a3b8' }}>
-                    {searching ? 'Searching...' : `Found ${filteredSearchResults.length} titles`}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {['All', 'Movie', 'TvSeries', 'Anime'].map((f) => (
-                    <button
-                      key={f}
-                      className={`stremio-filter-pill ${searchFilter === f ? 'active' : ''}`}
-                      onClick={() => setSearchFilter(f as any)}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {searching ? (
-                <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
-                  <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 12px' }} />
-                  <div>Searching across all domestic BDIX extensions...</div>
-                </div>
-              ) : filteredSearchResults.length === 0 ? (
-                <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
-                  <Search size={40} color="#64748b" style={{ margin: '0 auto 12px' }} />
-                  <div style={{ fontSize: '16px', fontWeight: 600, color: '#fff' }}>No media found</div>
-                  <div style={{ fontSize: '13px', marginTop: '4px' }}>
-                    Try another keyword, or paste a direct video link in the search bar.
-                  </div>
-                </div>
-              ) : (
-                <div className="stremio-shelf-grid">
-                  {filteredSearchResults.map((item) => (
-                    <MediaCard key={item.url} item={item} onClick={setSelectedItem} />
-                  ))}
-                </div>
-              )}
-            </div>
+            <SearchScreen
+              searchEngine={searchEngine}
+              extensions={extensions}
+              onSelectItem={setSelectedItem}
+            />
           )}
 
           {/* LIBRARY SCREEN */}
@@ -1062,6 +1310,8 @@ export const App: React.FC = () => {
           }}
         />
       )}
+
+
 
 
 

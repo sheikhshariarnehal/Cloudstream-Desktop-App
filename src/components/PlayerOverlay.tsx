@@ -1,13 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Episode, ExtractorLink, MpvTrack, SearchResponse, SkipInterval, SubtitleData } from '../types';
 import {
-  ArrowLeft,
+  ChevronLeft,
   Check,
   Cpu,
   FastForward,
-  Info,
+  Headphones,
   Maximize,
   Minimize,
   Pause,
@@ -16,11 +16,19 @@ import {
   RotateCw,
   Server,
   Sliders,
+  Sparkles,
   Subtitles,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
+import {
+  LANGUAGES,
+  formatTrackLabel,
+  getAutoSelectAudio,
+  getAutoSelectSubtitle,
+  getLanguageDisplay,
+} from '../utils/subtitleHelper';
 
 interface PlayerDiagnostics {
   codec?: string;
@@ -72,10 +80,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
   // Diagnostics & errors
   const [diagnosticsData, setDiagnosticsData] = useState<PlayerDiagnostics | null>(null);
-  const [activeHwdec, setActiveHwdec] = useState<string>('auto');
   const [playbackError, setPlaybackError] = useState<PlayerErrorPayload | null>(null);
 
   // Tracks, speed, aspect ratio, buffering & sync
@@ -86,6 +94,22 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
   const [panscanVal, setPanscanVal] = useState<number>(0.0);
   const [bufferedTime, setBufferedTime] = useState<number>(0);
   const [subDelay, setSubDelay] = useState<number>(0.0);
+
+  // Auto Track states (CloudStream architecture)
+  const [isAutoSub, setIsAutoSub] = useState<boolean>(() => {
+    const saved = localStorage.getItem('player_auto_sub');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [isAutoAudio, setIsAutoAudio] = useState<boolean>(() => {
+    const saved = localStorage.getItem('player_auto_audio');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [preferredSubLang, setPreferredSubLang] = useState<string>(() => {
+    return localStorage.getItem('player_preferred_sub_lang') || 'en';
+  });
+  const [preferredAudioLang, setPreferredAudioLang] = useState<string>(() => {
+    return localStorage.getItem('player_preferred_audio_lang') || 'auto';
+  });
 
   // Online external subtitles
   const [externalSubs, setExternalSubs] = useState<SubtitleData[]>([]);
@@ -106,6 +130,23 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
 
   const activeLink = links[currentLinkIndex] || links[0];
 
+  // Loading backdrop lifecycle: stays 100% solid until video frames actually render, then dissolves smoothly
+  const [backdropMounted, setBackdropMounted] = useState(true);
+  const [backdropFading, setBackdropFading] = useState(false);
+
+  useEffect(() => {
+    if (isVideoReady) {
+      setBackdropFading(true);
+      const timer = setTimeout(() => {
+        setBackdropMounted(false);
+      }, 350);
+      return () => clearTimeout(timer);
+    } else {
+      setBackdropMounted(true);
+      setBackdropFading(false);
+    }
+  }, [isVideoReady]);
+
   // ── HUD auto-hide ─────────────────────────────────────────────────────────
   const resetHudTimer = () => {
     setShowHud(true);
@@ -123,11 +164,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
 
   // Keep HUD alive while popups or menus are open
   useEffect(() => {
-    if (showServerPicker || showDiagnostics || showSubMenu || showAudioMenu || playbackError) {
+    if (showServerPicker || showDiagnostics || showSubMenu || showAudioMenu || showSettingsMenu || playbackError) {
       if (hudTimerRef.current) clearTimeout(hudTimerRef.current);
       setShowHud(true);
     }
-  }, [showServerPicker, showDiagnostics, showSubMenu, showAudioMenu, playbackError]);
+  }, [showServerPicker, showDiagnostics, showSubMenu, showAudioMenu, showSettingsMenu, playbackError]);
 
   // ── Center ripple feedback trigger ────────────────────────────────────────
   const triggerFeedback = (
@@ -186,7 +227,6 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     let unlistenPaused: (() => void) | undefined;
     let unlistenBuffering: (() => void) | undefined;
     let unlistenBufferingPct: (() => void) | undefined;
-    let unlistenHwdec: (() => void) | undefined;
     let unlistenTrackList: (() => void) | undefined;
     let unlistenAid: (() => void) | undefined;
     let unlistenSid: (() => void) | undefined;
@@ -202,7 +242,8 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       unlistenTime = await listen<number>('player://time-pos', (e) => {
         if (typeof e.payload === 'number') {
           setCurrentTime(e.payload);
-          if (e.payload > 0) {
+          // Only mark video ready if playback has actually moved forward into active presentation
+          if (e.payload > 0.3) {
             setIsVideoReady(true);
             setIsBuffering(false);
           }
@@ -213,6 +254,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         if (typeof e.payload === 'number') {
           setDuration(e.payload);
         }
+      });
+
+      unlistenFileLoaded = await listen('player://file-loaded', () => {
+        // Metadata loaded; stay in loading screen until video frames actually render
       });
 
       unlistenPaused = await listen<boolean>('player://paused', (e) => {
@@ -229,16 +274,12 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         }
       });
 
-      unlistenHwdec = await listen<string>('player://hwdec', (e) => {
-        if (e.payload) {
-          setActiveHwdec(e.payload);
-        }
-      });
-
       unlistenVideoReady = await listen<{ load_id?: number; ready: boolean }>('player://video-ready', (e) => {
         if (e.payload?.ready) {
           setIsVideoReady(true);
           setIsBuffering(false);
+        } else {
+          setIsVideoReady(false);
         }
       });
 
@@ -320,7 +361,6 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       if (unlistenPaused) unlistenPaused();
       if (unlistenBuffering) unlistenBuffering();
       if (unlistenBufferingPct) unlistenBufferingPct();
-      if (unlistenHwdec) unlistenHwdec();
       if (unlistenVideoReady) unlistenVideoReady();
       if (unlistenTrackList) unlistenTrackList();
       if (unlistenAid) unlistenAid();
@@ -604,7 +644,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     try {
       const res: SubtitleData[] = await invoke('search_subtitles', {
         query: item.name,
-        lang: 'en',
+        lang: preferredSubLang || 'en',
       });
       setExternalSubs(res);
     } catch (e) {
@@ -621,6 +661,97 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     } catch (e) {
       console.error('Failed to add external subtitle:', e);
     }
+  };
+
+  // Filter embedded tracks
+  const audioTracks = tracks.filter((t) => t.type === 'audio');
+  const subTracks = tracks.filter((t) => t.type === 'sub');
+
+  // Auto track resolution results using SubtitleHelper (CloudStream logic)
+  const autoSubMatch = useMemo(() => {
+    return getAutoSelectSubtitle(subTracks, externalSubs, preferredSubLang);
+  }, [subTracks, externalSubs, preferredSubLang]);
+
+  const autoAudioMatch = useMemo(() => {
+    return getAutoSelectAudio(audioTracks, preferredAudioLang);
+  }, [audioTracks, preferredAudioLang]);
+
+  // Synchronize auto track selections
+  useEffect(() => {
+    if (isAutoSub && subTracks.length > 0) {
+      if (autoSubMatch?.track) {
+        if (activeSid !== autoSubMatch.track.id) {
+          invoke('player_set_subtitle_track', { sid: autoSubMatch.track.id }).catch(() => {});
+          setActiveSid(autoSubMatch.track.id);
+        }
+      }
+    }
+  }, [isAutoSub, subTracks, autoSubMatch, activeSid]);
+
+  useEffect(() => {
+    if (isAutoAudio && audioTracks.length > 0) {
+      if (autoAudioMatch?.track) {
+        if (activeAid !== autoAudioMatch.track.id) {
+          invoke('player_set_audio_track', { aid: autoAudioMatch.track.id }).catch(() => {});
+          setActiveAid(autoAudioMatch.track.id);
+        }
+      }
+    }
+  }, [isAutoAudio, audioTracks, autoAudioMatch, activeAid]);
+
+  const handleSelectAutoSub = () => {
+    setIsAutoSub(true);
+    localStorage.setItem('player_auto_sub', 'true');
+    if (autoSubMatch?.track) {
+      invoke('player_set_subtitle_track', { sid: autoSubMatch.track.id }).catch(() => {});
+      setActiveSid(autoSubMatch.track.id);
+    } else {
+      invoke('player_set_subtitle_track', { sid: -1 }).catch(() => {});
+    }
+  };
+
+  const handleDisableSubs = () => {
+    setIsAutoSub(false);
+    localStorage.setItem('player_auto_sub', 'false');
+    invoke('player_set_subtitle_track', { sid: 0 }).catch(() => {});
+    setActiveSid(0);
+  };
+
+  const handleSelectSubTrack = (sid: number) => {
+    setIsAutoSub(false);
+    localStorage.setItem('player_auto_sub', 'false');
+    invoke('player_set_subtitle_track', { sid }).catch(() => {});
+    setActiveSid(sid);
+  };
+
+  const handleSelectAutoAudio = () => {
+    setIsAutoAudio(true);
+    localStorage.setItem('player_auto_audio', 'true');
+    if (autoAudioMatch?.track) {
+      invoke('player_set_audio_track', { aid: autoAudioMatch.track.id }).catch(() => {});
+      setActiveAid(autoAudioMatch.track.id);
+    } else {
+      invoke('player_set_audio_track', { aid: -1 }).catch(() => {});
+    }
+  };
+
+  const handleSelectAudioTrack = (aid: number) => {
+    setIsAutoAudio(false);
+    localStorage.setItem('player_auto_audio', 'false');
+    invoke('player_set_audio_track', { aid }).catch(() => {});
+    setActiveAid(aid);
+  };
+
+  const handleChangePreferredSubLang = (lang: string) => {
+    setPreferredSubLang(lang);
+    localStorage.setItem('player_preferred_sub_lang', lang);
+    invoke('player_set_preferred_languages', { slang: lang, alang: preferredAudioLang }).catch(() => {});
+  };
+
+  const handleChangePreferredAudioLang = (lang: string) => {
+    setPreferredAudioLang(lang);
+    localStorage.setItem('player_preferred_audio_lang', lang);
+    invoke('player_set_preferred_languages', { slang: preferredSubLang, alang: lang }).catch(() => {});
   };
 
   // Timeline hover handlers
@@ -647,15 +778,21 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Filter embedded tracks
-  const audioTracks = tracks.filter((t) => t.type === 'audio');
-  const subTracks = tracks.filter((t) => t.type === 'sub');
-
   return (
     <div
-      className={`player-container${showHud ? ' hud-active' : ''}`}
+      className={`player-container${showHud ? ' hud-active' : ''}${!isVideoReady ? ' player-loading-mode' : ''}`}
       onMouseMove={resetHudTimer}
     >
+      {/* While video is initializing/buffering, render solid backdrop with simple loading circle only */}
+      {backdropMounted && (
+        <div className={`player-loading-backdrop${backdropFading ? ' fade-out' : ''}`}>
+          <div className="player-buffering-spinner" />
+          {bufferingPercent > 0 && bufferingPercent < 100 && (
+            <div className="player-buffering-pct">{Math.round(bufferingPercent)}%</div>
+          )}
+        </div>
+      )}
+
       {/* Click surface for Play/Pause and Double Click Fullscreen */}
       <div
         className="player-video-surface"
@@ -663,8 +800,8 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         onDoubleClick={toggleFullscreen}
       />
 
-      {/* Stremio-Style Buffering Spinner */}
-      {(!isVideoReady || isBuffering) && (
+      {/* Center Buffering Spinner for mid-playback caching */}
+      {isVideoReady && isBuffering && (
         <div className="player-buffering-overlay">
           <div className="player-buffering-spinner" />
           {bufferingPercent > 0 && bufferingPercent < 100 && (
@@ -977,9 +1114,9 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
 
       {/* Subtitles & Sync Popover */}
       {showSubMenu && (
-        <div className="player-popover-card" style={{ right: '80px' }} onClick={(e) => e.stopPropagation()}>
+        <div className="player-popover-card" style={{ right: '110px', width: '320px' }} onClick={(e) => e.stopPropagation()}>
           <div className="player-popover-header">
-            <span className="player-popover-title">Subtitles & Audio</span>
+            <span className="player-popover-title">Subtitles & Track Sync</span>
             <button
               onClick={() => setShowSubMenu(false)}
               style={{
@@ -993,6 +1130,41 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             </button>
           </div>
 
+          {/* Preferred Language Selector */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
+                Preferred Language
+              </span>
+              <span style={{ fontSize: '11px', color: '#a855f7', fontWeight: 600 }}>
+                {getLanguageDisplay(preferredSubLang).flag} {getLanguageDisplay(preferredSubLang).name}
+              </span>
+            </div>
+            <div style={{ position: 'relative' }}>
+              <select
+                value={preferredSubLang}
+                onChange={(e) => handleChangePreferredSubLang(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: '7px',
+                  color: '#e2e8f0',
+                  padding: '6px 10px',
+                  fontSize: '12px',
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.IETF_tag} value={l.IETF_tag} style={{ background: '#18181b', color: '#f4f4f5' }}>
+                    {l.flag} {l.languageName} ({l.nativeName})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           {/* Subtitle list */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div
@@ -1003,41 +1175,87 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 textTransform: 'uppercase',
               }}
             >
-              Embedded Subtitles
+              Subtitle Tracks
             </div>
+
+            {/* Auto Track Option */}
+            <button
+              className={`player-track-item${isAutoSub ? ' active' : ''}`}
+              onClick={handleSelectAutoSub}
+              style={{
+                background: isAutoSub ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                border: isAutoSub ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid rgba(255,255,255,0.05)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Sparkles size={16} color={isAutoSub ? '#c084fc' : '#94a3b8'} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontWeight: 600 }}>Auto Track</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        background: isAutoSub ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255,255,255,0.08)',
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        color: isAutoSub ? '#f3e8ff' : '#94a3b8',
+                      }}
+                    >
+                      CloudStream
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: isAutoSub ? '#d8b4fe' : '#64748b' }}>
+                    {autoSubMatch ? `Active: ${autoSubMatch.resolvedName}` : 'Auto-select preferred language'}
+                  </span>
+                </div>
+              </div>
+              {isAutoSub && <Check size={16} color="#a855f7" />}
+            </button>
 
             {/* Off Option */}
             <button
-              className={`player-track-item${activeSid === 0 ? ' active' : ''}`}
-              onClick={() => {
-                invoke('player_set_subtitle_track', { sid: 0 });
-                setActiveSid(0);
-              }}
+              className={`player-track-item${!isAutoSub && activeSid === 0 ? ' active' : ''}`}
+              onClick={handleDisableSubs}
             >
-              <span>Subtitles Off</span>
-              {activeSid === 0 && <Check size={16} color="#a855f7" />}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <X size={15} color={!isAutoSub && activeSid === 0 ? '#c084fc' : '#94a3b8'} />
+                <span>Subtitles Off</span>
+              </div>
+              {!isAutoSub && activeSid === 0 && <Check size={16} color="#a855f7" />}
             </button>
 
-            {subTracks.map((tr) => (
-              <button
-                key={tr.id}
-                className={`player-track-item${activeSid === tr.id ? ' active' : ''}`}
-                onClick={() => {
-                  invoke('player_set_subtitle_track', { sid: tr.id });
-                  setActiveSid(tr.id);
-                }}
-              >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span>{tr.title || tr.lang?.toUpperCase() || `Subtitle #${tr.id}`}</span>
-                  {tr.lang && (
-                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                      {tr.lang.toUpperCase()} {tr.codec ? `• ${tr.codec}` : ''}
-                    </span>
-                  )}
-                </div>
-                {activeSid === tr.id && <Check size={16} color="#a855f7" />}
-              </button>
-            ))}
+            {/* Embedded Subtitles */}
+            {subTracks.map((tr) => {
+              const formatted = formatTrackLabel(tr);
+              const isSelected = !isAutoSub && activeSid === tr.id;
+              const isAutoActive = isAutoSub && activeSid === tr.id;
+              return (
+                <button
+                  key={tr.id}
+                  className={`player-track-item${isSelected ? ' active' : ''}`}
+                  onClick={() => handleSelectSubTrack(tr.id)}
+                  style={{
+                    border: isAutoActive ? '1px dashed rgba(168, 85, 247, 0.5)' : undefined,
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>{formatted.flag}</span>
+                      <span>{formatted.title}</span>
+                      {isAutoActive && (
+                        <span style={{ fontSize: '10px', color: '#c084fc', background: 'rgba(168,85,247,0.2)', padding: '0 4px', borderRadius: '3px' }}>
+                          Auto
+                        </span>
+                      )}
+                    </div>
+                    {formatted.subtitle && (
+                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatted.subtitle}</span>
+                    )}
+                  </div>
+                  {isSelected && <Check size={16} color="#a855f7" />}
+                </button>
+              );
+            })}
 
             {subTracks.length === 0 && (
               <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 0' }}>
@@ -1118,7 +1336,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
               }}
             >
               <Subtitles size={14} />
-              <span>{isLoadingSubs ? 'Searching Subtitles…' : 'Search Online Subtitles'}</span>
+              <span>{isLoadingSubs ? 'Searching Subtitles…' : `Search Online Subtitles (${getLanguageDisplay(preferredSubLang).name})`}</span>
             </button>
 
             {externalSubs.length > 0 && (
@@ -1149,11 +1367,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         </div>
       )}
 
-      {/* Audio & Settings Popover */}
+      {/* Audio Tracks Popover */}
       {showAudioMenu && (
-        <div className="player-popover-card" style={{ right: '40px' }} onClick={(e) => e.stopPropagation()}>
+        <div className="player-popover-card" style={{ right: '75px', width: '310px' }} onClick={(e) => e.stopPropagation()}>
           <div className="player-popover-header">
-            <span className="player-popover-title">Audio & Settings</span>
+            <span className="player-popover-title">Audio Tracks</span>
             <button
               onClick={() => setShowAudioMenu(false)}
               style={{
@@ -1167,6 +1385,42 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             </button>
           </div>
 
+          {/* Preferred Audio Language selector */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
+                Preferred Language
+              </span>
+              <span style={{ fontSize: '11px', color: '#a855f7', fontWeight: 600 }}>
+                {preferredAudioLang === 'auto' ? 'Default / Auto' : getLanguageDisplay(preferredAudioLang).name}
+              </span>
+            </div>
+            <select
+              value={preferredAudioLang}
+              onChange={(e) => handleChangePreferredAudioLang(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: '7px',
+                color: '#e2e8f0',
+                padding: '6px 10px',
+                fontSize: '12px',
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="auto" style={{ background: '#18181b', color: '#f4f4f5' }}>
+                🌐 Default Stream / Auto Detect
+              </option>
+              {LANGUAGES.map((l) => (
+                <option key={l.IETF_tag} value={l.IETF_tag} style={{ background: '#18181b', color: '#f4f4f5' }}>
+                  {l.flag} {l.languageName} ({l.nativeName})
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Audio Tracks */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div
@@ -1177,35 +1431,74 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 textTransform: 'uppercase',
               }}
             >
-              Audio Track
+              Audio Track Selection
             </div>
-            {audioTracks.map((tr) => (
-              <button
-                key={tr.id}
-                className={`player-track-item${activeAid === tr.id ? ' active' : ''}`}
-                onClick={() => {
-                  invoke('player_set_audio_track', { aid: tr.id });
-                  setActiveAid(tr.id);
-                }}
-              >
+
+            {/* Auto Track Option */}
+            <button
+              className={`player-track-item${isAutoAudio ? ' active' : ''}`}
+              onClick={handleSelectAutoAudio}
+              style={{
+                background: isAutoAudio ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                border: isAutoAudio ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid rgba(255,255,255,0.05)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Sparkles size={16} color={isAutoAudio ? '#c084fc' : '#94a3b8'} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span>{tr.title || tr.lang?.toUpperCase() || `Audio Track #${tr.id}`}</span>
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#94a3b8',
-                      display: 'flex',
-                      gap: '6px',
-                    }}
-                  >
-                    {tr.lang && <span>{tr.lang.toUpperCase()}</span>}
-                    {tr.codec && <span>• {tr.codec.toUpperCase()}</span>}
-                    {tr.audio_channels && <span>({tr.audio_channels} ch)</span>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontWeight: 600 }}>Auto Track</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        background: isAutoAudio ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255,255,255,0.08)',
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        color: isAutoAudio ? '#f3e8ff' : '#94a3b8',
+                      }}
+                    >
+                      CloudStream
+                    </span>
                   </div>
+                  <span style={{ fontSize: '11px', color: isAutoAudio ? '#d8b4fe' : '#64748b' }}>
+                    {autoAudioMatch ? `Active: ${autoAudioMatch.resolvedName}` : 'Auto-select preferred audio'}
+                  </span>
                 </div>
-                {activeAid === tr.id && <Check size={16} color="#a855f7" />}
-              </button>
-            ))}
+              </div>
+              {isAutoAudio && <Check size={16} color="#a855f7" />}
+            </button>
+
+            {audioTracks.map((tr) => {
+              const formatted = formatTrackLabel(tr);
+              const isSelected = !isAutoAudio && activeAid === tr.id;
+              const isAutoActive = isAutoAudio && activeAid === tr.id;
+              return (
+                <button
+                  key={tr.id}
+                  className={`player-track-item${isSelected ? ' active' : ''}`}
+                  onClick={() => handleSelectAudioTrack(tr.id)}
+                  style={{
+                    border: isAutoActive ? '1px dashed rgba(168, 85, 247, 0.5)' : undefined,
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>{formatted.flag}</span>
+                      <span>{formatted.title}</span>
+                      {isAutoActive && (
+                        <span style={{ fontSize: '10px', color: '#c084fc', background: 'rgba(168,85,247,0.2)', padding: '0 4px', borderRadius: '3px' }}>
+                          Auto
+                        </span>
+                      )}
+                    </div>
+                    {formatted.subtitle && (
+                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatted.subtitle}</span>
+                    )}
+                  </div>
+                  {isSelected && <Check size={16} color="#a855f7" />}
+                </button>
+              );
+            })}
 
             {audioTracks.length === 0 && (
               <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 0' }}>
@@ -1213,9 +1506,29 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Playback Settings Popover */}
+      {showSettingsMenu && (
+        <div className="player-popover-card" style={{ right: '40px', width: '280px' }} onClick={(e) => e.stopPropagation()}>
+          <div className="player-popover-header">
+            <span className="player-popover-title">Playback Settings</span>
+            <button
+              onClick={() => setShowSettingsMenu(false)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#94a3b8',
+                cursor: 'pointer',
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
 
           {/* Playback Speed */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
+          <div>
             <div
               style={{
                 fontSize: '11px',
@@ -1285,16 +1598,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           <div className="player-title-box">
             <button
               onClick={handleClose}
-              className="player-ctrl-btn primary"
-              style={{
-                background: 'rgba(255,255,255,0.1)',
-                borderRadius: '50%',
-                width: '38px',
-                height: '38px',
-                flexShrink: 0,
-              }}
+              className="player-back-btn"
+              title="Back (Esc)"
             >
-              <ArrowLeft size={20} />
+              <ChevronLeft size={22} />
             </button>
             <div className="player-title-text">
               <div className="player-title">{item.name}</div>
@@ -1307,32 +1614,8 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             </div>
           </div>
 
-          {/* Top Right: Hardware Decoder Badge + Server Picker */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {/* HWDEC Status Pill & Diagnostics Toggle */}
-            <button
-              onClick={toggleDiagnostics}
-              title="Click to view MPV Video Diagnostics (Press 'D')"
-              style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                color: activeHwdec && activeHwdec !== 'no' ? '#4ade80' : '#facc15',
-                padding: '6px 12px',
-                borderRadius: '6px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                cursor: 'pointer',
-                fontWeight: 700,
-                fontSize: '11px',
-                letterSpacing: '0.5px',
-              }}
-            >
-              <Cpu size={14} />
-              <span>HW: {activeHwdec.toUpperCase()}</span>
-              <Info size={12} style={{ opacity: 0.7 }} />
-            </button>
-
+          {/* Top Right: Server Picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {/* Server picker */}
             <div style={{ position: 'relative', flexShrink: 0 }}>
               <button
@@ -1340,48 +1623,18 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setShowServerPicker(!showServerPicker);
                   setShowSubMenu(false);
                   setShowAudioMenu(false);
+                  setShowSettingsMenu(false);
                 }}
-                style={{
-                  background: 'rgba(255,255,255,0.1)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  color: '#fff',
-                  padding: '8px 14px',
-                  borderRadius: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                }}
+                className={`player-hud-pill player-hud-server-btn${showServerPicker ? ' active' : ''}`}
+                title="Select Server / Mirror"
               >
-                <Server size={16} />
+                <Server size={14} />
                 <span>{activeLink?.source || 'Servers'}</span>
               </button>
 
               {showServerPicker && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '46px',
-                    right: 0,
-                    background: '#161b26',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: '10px',
-                    padding: '8px',
-                    width: '260px',
-                    boxShadow: '0 12px 30px rgba(0,0,0,0.8)',
-                    zIndex: 100,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#64748b',
-                      fontWeight: 700,
-                      padding: '4px 8px',
-                    }}
-                  >
+                <div className="player-dropdown-menu">
+                  <div className="player-dropdown-title">
                     AVAILABLE STREAM MIRRORS
                   </div>
                   {links.map((link, idx) => (
@@ -1391,24 +1644,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                         setCurrentLinkIndex(idx);
                         setShowServerPicker(false);
                       }}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        background:
-                          currentLinkIndex === idx ? 'rgba(99, 102, 241, 0.25)' : 'transparent',
-                        color: currentLinkIndex === idx ? '#fff' : '#cbd5e1',
-                        border: 'none',
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
+                      className={`player-dropdown-item${currentLinkIndex === idx ? ' active' : ''}`}
                     >
                       <span>{link.name}</span>
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>{link.quality}</span>
+                      <span className="player-dropdown-badge">{link.quality}</span>
                     </button>
                   ))}
                 </div>
@@ -1529,9 +1768,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 onClick={() => {
                   setShowSubMenu(!showSubMenu);
                   setShowAudioMenu(false);
+                  setShowSettingsMenu(false);
                   setShowServerPicker(false);
                 }}
-                title="Subtitles & Sync"
+                title="Subtitles (C)"
                 style={{
                   background:
                     showSubMenu || activeSid !== 0 ? 'rgba(99, 102, 241, 0.3)' : undefined,
@@ -1543,18 +1783,39 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 <Subtitles size={20} />
               </button>
 
-              {/* Audio & Settings */}
+              {/* Audio Tracks */}
               <button
                 className="player-ctrl-btn"
                 onClick={() => {
                   setShowAudioMenu(!showAudioMenu);
                   setShowSubMenu(false);
+                  setShowSettingsMenu(false);
                   setShowServerPicker(false);
                 }}
-                title="Audio Tracks & Playback Settings"
+                title="Audio Tracks"
                 style={{
                   background: showAudioMenu ? 'rgba(99, 102, 241, 0.3)' : undefined,
                   color: showAudioMenu ? 'var(--primary)' : undefined,
+                  padding: '6px',
+                  borderRadius: '6px',
+                }}
+              >
+                <Headphones size={20} />
+              </button>
+
+              {/* Playback Settings */}
+              <button
+                className="player-ctrl-btn"
+                onClick={() => {
+                  setShowSettingsMenu(!showSettingsMenu);
+                  setShowSubMenu(false);
+                  setShowAudioMenu(false);
+                  setShowServerPicker(false);
+                }}
+                title="Playback Settings"
+                style={{
+                  background: showSettingsMenu ? 'rgba(99, 102, 241, 0.3)' : undefined,
+                  color: showSettingsMenu ? 'var(--primary)' : undefined,
                   padding: '6px',
                   borderRadius: '6px',
                 }}

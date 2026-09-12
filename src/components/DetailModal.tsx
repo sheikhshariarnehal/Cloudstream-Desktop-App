@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Episode, ExtractorLink, LoadResponse, SearchResponse } from '../types';
-import { ArrowLeft, Play, Plus, Check, Clock, Calendar, Server } from 'lucide-react';
+import { ChevronLeft, Play, Plus, Check, Clock, Calendar, Server } from 'lucide-react';
 
 interface DetailModalProps {
   item: SearchResponse;
@@ -97,7 +97,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
           onClick={onClose}
           title="Back to Catalog"
         >
-          <ArrowLeft size={20} />
+          <ChevronLeft size={22} style={{ marginRight: '2px', display: 'block' }} />
         </button>
 
         {loading ? (
@@ -117,7 +117,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
                 style={{
                   position: 'absolute',
                   inset: 0,
-                  background: 'linear-gradient(0deg, var(--stremio-bg) 0%, rgba(14, 13, 26, 0.6) 50%, rgba(14, 13, 26, 0.2) 100%)',
+                  background: 'linear-gradient(0deg, #0d0b1a 0%, rgba(13, 11, 26, 0.75) 50%, rgba(13, 11, 26, 0.3) 100%)',
                 }}
               />
 
@@ -130,65 +130,73 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
                     height: '240px',
                     objectFit: 'cover',
                     borderRadius: '12px',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.8)',
-                    border: '1px solid rgba(255,255,255,0.15)',
+                    boxShadow: '0 12px 36px rgba(0,0,0,0.7)',
                     flexShrink: 0,
                   }}
                 />
 
                 <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                    {details.tags.map((t) => (
-                      <span
-                        key={t}
-                        style={{
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          background: 'rgba(99, 102, 241, 0.2)',
-                          color: '#c7d2fe',
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                        }}
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
+                  {/* Genre / Tag Chips */}
+                  {details.tags.length > 0 && (
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                      {details.tags.map((t) => (
+                        <span
+                          key={t}
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            color: '#a78bfa',
+                            textTransform: 'capitalize',
+                          }}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
-                  <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '32px', fontWeight: 800, color: '#fff', marginBottom: '8px' }}>
+                  <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '34px', fontWeight: 800, color: '#fff', marginBottom: '10px', letterSpacing: '-0.3px' }}>
                     {details.name}
                   </h1>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', color: '#94a3b8', fontSize: '13px', marginBottom: '14px' }}>
+                  {/* Metadata Row matching Hero banner */}
+                  <div className="stremio-hero-meta-row">
                     {details.year && (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Calendar size={14} /> {details.year}
+                      <span className="hero-meta-chip hero-year-chip">
+                        <Calendar size={13} style={{ marginRight: '4px' }} /> {details.year}
                       </span>
                     )}
                     {details.duration_minutes && (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Clock size={14} /> {details.duration_minutes} min
+                      <span className="hero-meta-chip hero-quality-chip">
+                        <Clock size={13} style={{ marginRight: '4px' }} /> {details.duration_minutes} min
                       </span>
                     )}
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Server size={14} /> {details.api_name}
+                    <span className="hero-meta-chip hero-provider-chip">
+                      <Server size={13} style={{ marginRight: '4px' }} /> {details.api_name}
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '10px' }}>
+                  {/* Action Buttons matching Hero pills */}
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '16px' }}>
                     {details.episodes.length > 0 && (
                       <button
-                        className="btn-primary"
+                        type="button"
+                        className="stremio-hero-play-btn"
                         onClick={() => handlePlayEpisode(details.episodes[0])}
                         disabled={extracting !== null}
                       >
-                        <Play size={16} fill="#fff" />
-                        {extracting !== null ? 'Extracting Streams...' : 'Play Now'}
+                        <Play size={18} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                        <span>{extracting !== null ? 'Extracting Streams...' : 'Play Now'}</span>
                       </button>
                     )}
-                    <button className="btn-secondary" onClick={handleToggleWatchlist}>
-                      {isWatchlisted ? <Check size={16} /> : <Plus size={16} />}
-                      {isWatchlisted ? 'In Watchlist' : 'Watchlist'}
+                    <button
+                      type="button"
+                      className={`stremio-hero-watchlist-btn ${isWatchlisted ? 'active' : ''}`}
+                      onClick={handleToggleWatchlist}
+                      title={isWatchlisted ? 'Remove from Library' : 'Add to Library'}
+                    >
+                      {isWatchlisted ? <Check size={18} /> : <Plus size={18} />}
+                      <span>{isWatchlisted ? 'In Library' : 'Library'}</span>
                     </button>
                   </div>
                 </div>
@@ -198,8 +206,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
             {/* Synopsis, Cast & Episodes */}
             <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 48px', width: '100%', boxSizing: 'border-box' }}>
               <div style={{ marginBottom: '28px' }}>
-                <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '10px', color: '#e2e8f0' }}>Overview</h3>
-                <p style={{ fontSize: '15px', lineHeight: '1.7', color: '#94a3b8', maxWidth: '850px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '10px', color: '#ffffff' }}>Overview</h3>
+                <p style={{ fontSize: '14.5px', lineHeight: '1.7', color: '#94a3b8', maxWidth: '850px' }}>
                   {details.plot || 'No synopsis provided for this title.'}
                 </p>
               </div>
@@ -207,7 +215,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
               {/* Cast Row */}
               {details.cast.length > 0 && (
                 <div style={{ marginBottom: '28px' }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '12px', color: '#e2e8f0' }}>Cast</h3>
+                  <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '12px', color: '#ffffff' }}>Cast</h3>
                   <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
                     {details.cast.map((actor) => (
                       <div key={actor.name} style={{ width: '85px', textAlign: 'center', flexShrink: 0 }}>
@@ -227,27 +235,17 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
               )}
 
               {/* Episodes Section */}
-              {details.episodes.length > 1 && (
+              {details.episodes.length > 0 && (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#e2e8f0' }}>Episodes</h3>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                    <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#ffffff' }}>Episodes</h3>
                     {seasons.length > 1 && (
-                      <div style={{ display: 'flex', gap: '6px' }}>
+                      <div style={{ display: 'flex', gap: '8px' }}>
                         {seasons.map((s) => (
                           <button
                             key={s}
+                            className={`detail-season-tab${selectedSeason === s ? ' active' : ''}`}
                             onClick={() => setSelectedSeason(s)}
-                            style={{
-                              padding: '5px 12px',
-                              borderRadius: '8px',
-                              border: '1px solid',
-                              borderColor: selectedSeason === s ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
-                              background: selectedSeason === s ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                              color: selectedSeason === s ? '#fff' : '#94a3b8',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                            }}
                           >
                             Season {s}
                           </button>
@@ -256,68 +254,32 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, onClose, onPlay 
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {currentEpisodes.map((ep) => (
                       <div
                         key={ep.episode}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '12px 16px',
-                          background: 'rgba(255, 255, 255, 0.03)',
-                          borderRadius: '10px',
-                          border: '1px solid rgba(255, 255, 255, 0.05)',
-                          cursor: 'pointer',
-                          transition: 'background 0.2s',
-                        }}
+                        className="detail-episode-card"
                         onClick={() => handlePlayEpisode(ep)}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                          <div
-                            style={{
-                              width: '32px',
-                              height: '32px',
-                              borderRadius: '50%',
-                              background: 'rgba(99, 102, 241, 0.2)',
-                              color: 'var(--primary)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '13px',
-                            }}
-                          >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
+                          <span className="detail-episode-number">
                             {ep.episode}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: '14px', fontWeight: 600, color: '#f8fafc' }}>
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div className="detail-episode-title">
                               {ep.name || `Episode ${ep.episode}`}
                             </div>
                             {ep.description && (
-                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px', maxWidth: '600px' }}>
+                              <div className="detail-episode-sub">
                                 {ep.description}
                               </div>
                             )}
                           </div>
                         </div>
 
-                        <button
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: extracting === ep.episode ? 'var(--accent-cyan)' : 'var(--text-muted)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            fontSize: '13px',
-                            fontWeight: 600,
-                          }}
-                        >
-                          <Play size={16} fill={extracting === ep.episode ? 'var(--accent-cyan)' : 'none'} />
-                          {extracting === ep.episode ? 'Extracting...' : 'Play'}
-                        </button>
+                        <div className={`detail-episode-icon-btn${extracting === ep.episode ? ' extracting' : ''}`}>
+                          <Play size={16} fill={extracting === ep.episode ? 'var(--accent-cyan)' : 'currentColor'} />
+                        </div>
                       </div>
                     ))}
                   </div>

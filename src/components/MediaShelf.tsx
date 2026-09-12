@@ -36,31 +36,30 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
     <div className="media-shelf-container">
       {/* Shelf Header with Title & Navigation Arrows */}
       <div className="media-shelf-header">
-        <div className="media-shelf-title-left">
+        <div
+          className={`media-shelf-title-left ${onSeeAll ? 'clickable' : ''}`}
+          onClick={onSeeAll}
+          role={onSeeAll ? 'button' : undefined}
+          tabIndex={onSeeAll ? 0 : undefined}
+          title={onSeeAll ? `View all from ${title}` : undefined}
+        >
           <h2 className="media-shelf-title">{title}</h2>
           {subactions}
         </div>
 
         <div className="media-shelf-nav">
-          {onSeeAll && (
-            <button
-              className="media-shelf-see-all-btn"
-              onClick={onSeeAll}
-              title="Expand shelf"
-            >
-              <span>See All</span>
-            </button>
-          )}
-          {/* Circular Left Navigation Arrow */}
+          {/* Circular Left Navigation Arrow (Desktop horizontal scroll) */}
           <button
+            type="button"
             className="media-shelf-arrow-btn"
             onClick={() => scroll('left')}
             title="Scroll left"
           >
             <ChevronLeft size={16} />
           </button>
-          {/* Circular Right Navigation Arrow */}
+          {/* Circular Right Navigation Arrow (Desktop horizontal scroll) */}
           <button
+            type="button"
             className="media-shelf-arrow-btn"
             onClick={() => scroll('right')}
             title="Scroll right"

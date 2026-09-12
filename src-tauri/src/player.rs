@@ -82,6 +82,7 @@ pub struct MpvPlayer {
     recent_logs: Arc<Mutex<VecDeque<String>>>,
     is_playing: Arc<AtomicBool>,
     video_ready_state: Arc<Mutex<VideoReadyState>>,
+    app_handle: AppHandle,
 }
 
 impl MpvPlayer {
@@ -144,8 +145,10 @@ impl MpvPlayer {
 
         let mpv_shared = Arc::new(Mutex::new(Some(mpv)));
         let mpv_diag_ref = Arc::clone(&mpv_shared);
+        let app_handle_thread = app_handle.clone();
 
         thread::spawn(move || {
+            let app_handle = app_handle_thread;
             let _ = mpv_client.observe_property("time-pos", Format::Double, 0);
             let _ = mpv_client.observe_property("duration", Format::Double, 0);
             let _ = mpv_client.observe_property("pause", Format::Flag, 0);
@@ -283,11 +286,16 @@ impl MpvPlayer {
                         println!("[MPV Event] StartFile");
                         video_ready_state_thread.lock().unwrap().start_file();
                         let _ = app_handle.emit("player://start-file", ());
+                        let _ = app_handle.emit(
+                            "player://video-ready",
+                            serde_json::json!({ "ready": false }),
+                        );
                     }
                     Event::FileLoaded => {
                         println!("[MPV Event] FileLoaded");
                         video_ready_state_thread.lock().unwrap().file_loaded();
                         let _ = app_handle.emit("player://file-loaded", ());
+                        // Do NOT emit video-ready: true on FileLoaded! Video frames are not rendered yet.
                         if let Ok(guard) = mpv_diag_ref.lock() {
                             if let Some(ref mpv) = *guard {
                                 if let Ok(s) = mpv.get_property::<String>("track-list") {
@@ -304,12 +312,16 @@ impl MpvPlayer {
                             .lock()
                             .unwrap()
                             .playback_restarted();
-                        if let Some(id) = load_id {
-                            println!("[MPV Event] PlaybackRestart ready confirmation for load_id: {}", id);
-                            let _ = app_handle.emit(
-                                "player://video-ready",
-                                serde_json::json!({ "load_id": id, "ready": true }),
-                            );
+                        if let Some(load_id) = load_id {
+                            let app = app_handle.clone();
+                            // Allow Direct3D 11 swapchain to present the first frame before declaring ready
+                            thread::spawn(move || {
+                                thread::sleep(std::time::Duration::from_millis(120));
+                                let _ = app.emit(
+                                    "player://video-ready",
+                                    serde_json::json!({ "load_id": load_id, "ready": true }),
+                                );
+                            });
                         }
                         let _ = app_handle.emit("player://playback-restart", ());
                     }
@@ -346,6 +358,7 @@ impl MpvPlayer {
             recent_logs,
             is_playing,
             video_ready_state,
+            app_handle,
         })
     }
 
@@ -423,7 +436,11 @@ impl MpvPlayer {
             let _ = mpv.set_property("title", t);
         }
 
-        self.video_ready_state.lock().unwrap().begin_transition(true);
+        let load_id = self.video_ready_state.lock().unwrap().begin_transition(true);
+        let _ = self.app_handle.emit(
+            "player://video-ready",
+            serde_json::json!({ "load_id": load_id, "ready": false }),
+        );
         let cmd_res = mpv.command("loadfile", &[url, "replace"]);
         println!("[Player] mpv.command('loadfile') result: {:?}", cmd_res);
         cmd_res.map_err(|e| format!("Failed to load file in MPV: {:?}", e))?;
@@ -484,7 +501,10 @@ impl MpvPlayer {
     pub fn set_audio_track(&self, aid: i64) -> Result<(), String> {
         let guard = self.mpv.lock().unwrap();
         let mpv = guard.as_ref().ok_or("MPV not initialized")?;
-        if aid <= 0 {
+        if aid == -1 {
+            mpv.set_property("aid", "auto")
+                .map_err(|e| format!("Failed to set audio track to auto: {:?}", e))
+        } else if aid <= 0 {
             mpv.set_property("aid", "no")
                 .map_err(|e| format!("Failed to disable audio track: {:?}", e))
         } else {
@@ -496,13 +516,28 @@ impl MpvPlayer {
     pub fn set_subtitle_track(&self, sid: i64) -> Result<(), String> {
         let guard = self.mpv.lock().unwrap();
         let mpv = guard.as_ref().ok_or("MPV not initialized")?;
-        if sid <= 0 {
+        if sid == -1 {
+            mpv.set_property("sid", "auto")
+                .map_err(|e| format!("Failed to set subtitle track to auto: {:?}", e))
+        } else if sid <= 0 {
             mpv.set_property("sid", "no")
                 .map_err(|e| format!("Failed to disable subtitle track: {:?}", e))
         } else {
             mpv.set_property("sid", sid)
                 .map_err(|e| format!("Failed to set subtitle track: {:?}", e))
         }
+    }
+
+    pub fn set_preferred_languages(&self, slang: Option<&str>, alang: Option<&str>) -> Result<(), String> {
+        let guard = self.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or("MPV not initialized")?;
+        if let Some(s) = slang {
+            let _ = mpv.set_property("slang", s);
+        }
+        if let Some(a) = alang {
+            let _ = mpv.set_property("alang", a);
+        }
+        Ok(())
     }
 
     pub fn set_subtitle_delay(&self, delay: f64) -> Result<(), String> {
@@ -549,7 +584,11 @@ impl MpvPlayer {
         println!("[Player] stop called");
         let guard = self.mpv.lock().unwrap();
         let mpv = guard.as_ref().ok_or("MPV not initialized")?;
-        self.video_ready_state.lock().unwrap().begin_transition(false);
+        let load_id = self.video_ready_state.lock().unwrap().begin_transition(false);
+        let _ = self.app_handle.emit(
+            "player://video-ready",
+            serde_json::json!({ "load_id": load_id, "ready": false }),
+        );
         let res = mpv.command("stop", &[]);
         println!("[Player] mpv.command('stop') result: {:?}", res);
         self.is_playing.store(false, Ordering::Relaxed);

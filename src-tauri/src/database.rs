@@ -1,4 +1,4 @@
-use crate::models::{RepositoryEntry, WatchHistoryItem, WatchlistItem};
+use crate::models::{RepositoryEntry, SearchHistoryItem, WatchHistoryItem, WatchlistItem};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
@@ -80,6 +80,14 @@ impl Database {
                 file_path TEXT NOT NULL,
                 is_enabled INTEGER DEFAULT 1,
                 installed_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                search_text TEXT NOT NULL,
+                searched_at INTEGER NOT NULL,
+                types TEXT NOT NULL,
+                key TEXT NOT NULL UNIQUE
             );
 
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -331,6 +339,70 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn add_search_history(&self, item: &SearchHistoryItem) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let types_json = serde_json::to_string(&item.types).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "
+            INSERT INTO search_history (search_text, searched_at, types, key)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(key) DO UPDATE SET
+                searched_at = excluded.searched_at,
+                types = excluded.types;
+            ",
+            params![item.search_text, item.searched_at, types_json, item.key],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_search_history(&self, limit: usize) -> Result<Vec<SearchHistoryItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "
+            SELECT id, search_text, searched_at, types, key
+            FROM search_history
+            ORDER BY searched_at DESC
+            LIMIT ?1
+            ",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let id: i64 = row.get(0)?;
+            let search_text: String = row.get(1)?;
+            let searched_at: i64 = row.get(2)?;
+            let types_str: String = row.get(3)?;
+            let key: String = row.get(4)?;
+
+            let types = serde_json::from_str(&types_str).unwrap_or_default();
+
+            Ok(SearchHistoryItem {
+                id: Some(id),
+                search_text,
+                searched_at,
+                types,
+                key,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn remove_search_history_item(&self, key: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM search_history WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    pub fn clear_search_history(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM search_history", [])?;
+        Ok(())
     }
 }
 

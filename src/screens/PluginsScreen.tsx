@@ -225,7 +225,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
 
       {/* Preset Repositories Quick Selector */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <span style={{ fontSize: '12px', fontWeight: 600, color: '#8e8aa4', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Quick Repos:
         </span>
         {PRESET_REPOSITORIES.map((preset) => (
@@ -237,20 +237,20 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
             }}
             style={{
               padding: '6px 14px',
-              borderRadius: '8px',
-              border: '1px solid',
-              borderColor: repoUrl === preset.url ? 'var(--primary)' : 'rgba(255,255,255,0.08)',
-              background: repoUrl === preset.url ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.03)',
-              color: repoUrl === preset.url ? '#fff' : '#94a3b8',
+              borderRadius: '9999px',
+              border: 'none',
+              background: repoUrl === preset.url ? 'rgba(124, 58, 237, 0.3)' : 'rgba(255, 255, 255, 0.05)',
+              color: repoUrl === preset.url ? '#fff' : '#8e8aa4',
               fontSize: '12px',
               fontWeight: 600,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
+              transition: 'all 0.15s ease',
             }}
           >
-            <Globe size={13} color={repoUrl === preset.url ? 'var(--primary)' : '#64748b'} />
+            <Globe size={13} color={repoUrl === preset.url ? 'var(--stremio-purple-light)' : '#8e8aa4'} />
             {preset.name}
           </button>
         ))}
@@ -261,16 +261,15 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
         style={{
           display: 'flex',
           gap: '12px',
-          background: 'var(--bg-card)',
-          padding: '12px 18px',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
+          background: 'rgba(255, 255, 255, 0.055)',
+          padding: '8px 12px 8px 18px',
+          borderRadius: '9999px',
+          border: 'none',
           marginBottom: '20px',
           alignItems: 'center',
-          boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
         }}
       >
-        <Globe size={20} color="var(--primary)" />
+        <Globe size={18} color="#8e8aa4" />
         <input
           type="text"
           value={repoUrl}
@@ -283,6 +282,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
             outline: 'none',
             color: '#fff',
             fontSize: '14px',
+            fontFamily: 'var(--font-body)',
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') handleFetchRepo();
@@ -292,7 +292,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
           className="btn-primary"
           onClick={() => handleFetchRepo()}
           disabled={loading}
-          style={{ padding: '8px 20px', fontSize: '13px' }}
+          style={{ padding: '8px 18px', fontSize: '13px', borderRadius: '9999px' }}
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           {loading ? 'Fetching...' : 'Sync Repo'}
@@ -303,8 +303,8 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
         <div
           style={{
             padding: '12px 18px',
-            background: 'rgba(99, 102, 241, 0.15)',
-            border: '1px solid rgba(99, 102, 241, 0.3)',
+            background: 'rgba(124, 58, 237, 0.15)',
+            border: 'none',
             borderRadius: '10px',
             color: '#c7d2fe',
             fontSize: '13px',
@@ -327,7 +327,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
         </h2>
 
         {installedPlugins.length === 0 ? (
-          <div style={{ padding: '24px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px dashed rgba(255,255,255,0.1)', color: '#64748b', fontSize: '14px' }}>
+          <div style={{ padding: '24px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: 'none', color: '#8e8aa4', fontSize: '14px' }}>
             No custom extensions installed yet. Click <strong>"Install"</strong> on any extension below to activate it!
           </div>
         ) : (
@@ -337,9 +337,9 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 key={p.id}
                 style={{
                   padding: '16px 20px',
-                  background: 'var(--bg-card)',
-                  borderRadius: '14px',
-                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  borderRadius: '12px',
+                  border: 'none',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
@@ -404,15 +404,15 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 key={type}
                 onClick={() => setActiveTypeFilter(type)}
                 style={{
-                  padding: '4px 12px',
-                  borderRadius: '999px',
-                  border: '1px solid',
-                  borderColor: activeTypeFilter === type ? 'var(--primary)' : 'rgba(255,255,255,0.08)',
-                  background: activeTypeFilter === type ? 'var(--primary)' : 'transparent',
-                  color: activeTypeFilter === type ? '#fff' : '#94a3b8',
+                  padding: '5px 14px',
+                  borderRadius: '9999px',
+                  border: 'none',
+                  background: activeTypeFilter === type ? 'rgba(124, 58, 237, 0.35)' : 'rgba(255, 255, 255, 0.05)',
+                  color: activeTypeFilter === type ? '#fff' : '#8e8aa4',
                   fontSize: '12px',
                   fontWeight: 600,
                   cursor: 'pointer',
+                  transition: 'all 0.15s ease',
                 }}
               >
                 {type}
@@ -421,7 +421,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '18px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
           {filteredPlugins.map((plugin) => {
             const installed = isInstalled(plugin.name);
             return (
@@ -429,14 +429,13 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 key={plugin.id}
                 style={{
                   padding: '20px',
-                  background: 'var(--bg-card)',
-                  borderRadius: '16px',
-                  border: '1px solid',
-                  borderColor: installed ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-subtle)',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  borderRadius: '14px',
+                  border: 'none',
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+                  boxShadow: 'none',
                 }}
               >
                 <div>
@@ -452,7 +451,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                       )}
                       <div style={{ fontWeight: 700, fontSize: '16px', color: '#fff' }}>{plugin.name}</div>
                     </div>
-                    <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>v{plugin.version}</span>
+                    <span style={{ fontSize: '11px', color: '#8e8aa4', fontWeight: 600 }}>v{plugin.version}</span>
                   </div>
 
                   <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
@@ -461,11 +460,11 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                         key={t}
                         style={{
                           fontSize: '10px',
-                          fontWeight: 700,
-                          background: 'rgba(99, 102, 241, 0.2)',
+                          fontWeight: 600,
+                          background: 'rgba(255, 255, 255, 0.06)',
                           color: '#c7d2fe',
-                          padding: '2px 7px',
-                          borderRadius: '4px',
+                          padding: '2px 8px',
+                          borderRadius: '9999px',
                         }}
                       >
                         {t}
@@ -478,8 +477,8 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span style={{ fontSize: '12px', color: '#64748b' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                  <span style={{ fontSize: '12px', color: '#8e8aa4' }}>
                     {plugin.authors.length > 0 ? `By ${plugin.authors.join(', ')}` : 'Community'}
                   </span>
 
@@ -490,9 +489,9 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                         padding: '6px 14px',
                         fontSize: '12px',
                         background: 'rgba(16, 185, 129, 0.15)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        border: 'none',
                         color: '#6ee7b7',
-                        borderRadius: 'var(--radius-md)',
+                        borderRadius: '8px',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',

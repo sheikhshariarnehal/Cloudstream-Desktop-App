@@ -28,7 +28,7 @@ impl EngineClient {
         let p = port.unwrap_or(DEFAULT_ENGINE_PORT);
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(20))
+                .timeout(Duration::from_secs(35))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             base_url: format!("http://127.0.0.1:{}", p),

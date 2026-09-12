@@ -28,6 +28,37 @@ export interface SearchResponse {
   episode?: number;
 }
 
+export interface SearchHistoryItem {
+  id?: number;
+  search_text: string;
+  searched_at: number;
+  types: TvType[];
+  key: string;
+}
+
+export interface ProviderSearchResult {
+  provider: string;
+  items: SearchResponse[];
+  current_page: number;
+  has_next: boolean;
+}
+
+export interface SearchMultiResult {
+  grouped: ProviderSearchResult[];
+  bundled: SearchResponse[];
+}
+
+export interface SearchChunkEvent {
+  query: string;
+  provider: string;
+  items: SearchResponse[];
+  completed_count: number;
+  total_count: number;
+  is_done: boolean;
+}
+
+export type SearchDisplayMode = 'grouped' | 'grid';
+
 export type WatchStatusFilter =
   | 'all'
   | 'watching'
@@ -100,9 +131,12 @@ export interface ExtractorLink {
 export interface SubtitleData {
   url: string;
   language: string;
-  ietf_tag: string;
-  origin: 'Embedded' | 'ExternalUrl' | 'DownloadedFile';
-  format: 'Vtt' | 'Srt' | 'Ass' | 'Unknown';
+  ietf_tag?: string;
+  origin?: 'Embedded' | 'ExternalUrl' | 'DownloadedFile' | string;
+  format?: 'Vtt' | 'Srt' | 'Ass' | 'Unknown' | string;
+  languageCode?: string;
+  originalName?: string;
+  name?: string;
 }
 
 export interface PluginManifest {
