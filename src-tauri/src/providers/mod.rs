@@ -19,18 +19,48 @@ impl ProviderRegistry {
     }
 
     /// Fetches home page catalog directly from the dynamic .cs3 engine.
-    /// If provider is None or "all", loads feeds across active installed extensions.
-    /// If provider is specified (e.g. "AllWish", "AniKoto"), loads that specific provider's homepage.
-    pub async fn get_home_page(&self, provider: Option<&str>) -> Vec<HomePageList> {
-        let p = match provider {
-            Some("all") | Some("All") | Some("All Extensions") | Some("") | None => None,
-            Some(name) => Some(name),
-        };
-        match self.engine.get_main_page(p, 1).await {
-            Ok(shelves) => shelves,
-            Err(e) => {
-                eprintln!("[ProviderRegistry] Error loading main page: {}", e);
+    /// Supports virtual providers:
+    /// - "none": Returns empty list (clean offline home screen)
+    /// - "random": Aggregates random shelves across installed providers
+    /// - "all" / None: Default multi-provider catalog
+    /// - Specific provider name (e.g. "DiscoveryFTP", "DhakaFlix")
+    pub async fn get_home_page(&self, provider: Option<&str>, page: i32) -> Vec<HomePageList> {
+        match provider {
+            Some("none") | Some("None") => {
+                // CloudStream noneApi parity: no provider rows, clean home screen
                 Vec::new()
+            }
+            Some("random") | Some("Random") => {
+                // CloudStream randomApi parity: sample shelves from installed providers
+                let providers = self.engine.get_providers().await.unwrap_or_default();
+                let mut combined_shelves = Vec::new();
+                for p in providers.into_iter().filter(|p| p.has_main_page) {
+                    if let Ok(mut shelves) = self.engine.get_main_page(Some(&p.name), 1).await {
+                        combined_shelves.append(&mut shelves);
+                    }
+                    if combined_shelves.len() >= 12 {
+                        break;
+                    }
+                }
+                combined_shelves
+            }
+            Some("all") | Some("All") | Some("All Extensions") | Some("") | None => {
+                match self.engine.get_main_page(None, page).await {
+                    Ok(shelves) => shelves,
+                    Err(e) => {
+                        eprintln!("[ProviderRegistry] Error loading main page: {}", e);
+                        Vec::new()
+                    }
+                }
+            }
+            Some(name) => {
+                match self.engine.get_main_page(Some(name), page).await {
+                    Ok(shelves) => shelves,
+                    Err(e) => {
+                        eprintln!("[ProviderRegistry] Error loading main page for {}: {}", name, e);
+                        Vec::new()
+                    }
+                }
             }
         }
     }

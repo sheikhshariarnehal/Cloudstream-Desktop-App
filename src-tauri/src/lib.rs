@@ -11,9 +11,9 @@ pub mod videoskip;
 use database::Database;
 use engine::EngineClient;
 use models::{
-    ExtractorLink, ExtensionInfo, HomePageList, LoadResponse, PluginManifest, ProviderSearchResult,
-    RepositoryEntry, RepositoryManifest, SearchChunkEvent, SearchHistoryItem, SearchMultiResult,
-    SearchResponse, SkipInterval, SubtitleData, WatchHistoryItem, WatchlistItem,
+    ExpandableShelf, ExtractorLink, ExtensionInfo, HomePageList, LoadResponse, PluginManifest,
+    ProviderSearchResult, RepositoryEntry, RepositoryManifest, SearchChunkEvent, SearchHistoryItem,
+    SearchMultiResult, SearchResponse, SkipInterval, SubtitleData, WatchHistoryItem, WatchlistItem,
 };
 use plugins::PluginManager;
 use providers::ProviderRegistry;
@@ -34,11 +34,103 @@ pub struct AppState {
     pub player: Arc<player::MpvPlayer>,
 }
 
+fn clean_alphanumeric(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+}
+
+fn normalize_provider_stem(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut without_parens = String::new();
+    let mut depth = 0;
+    for ch in lower.chars() {
+        if ch == '(' || ch == '[' {
+            depth += 1;
+        } else if ch == ')' || ch == ']' {
+            if depth > 0 { depth -= 1; }
+        } else if depth == 0 {
+            without_parens.push(ch);
+        }
+    }
+    let stripped = without_parens
+        .replace("provider", "")
+        .replace("plugin", "")
+        .replace("bdix", "");
+    stripped.chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+fn is_manifest_provider_match(m: &PluginManifest, p_name: &str) -> bool {
+    let stem_p = normalize_provider_stem(p_name);
+    let stem_m = normalize_provider_stem(&m.name);
+    let stem_m_id = normalize_provider_stem(&m.id);
+    let stem_m_internal = m.internal_name.as_deref().map(normalize_provider_stem).unwrap_or_default();
+
+    if stem_p.is_empty() {
+        return false;
+    }
+
+    m.name.eq_ignore_ascii_case(p_name)
+        || stem_p == stem_m
+        || (!stem_m_internal.is_empty() && stem_p == stem_m_internal)
+        || (!stem_m_id.is_empty() && (stem_m_id.starts_with(&stem_p) || stem_p.starts_with(&stem_m_id)))
+        || (!stem_m.is_empty() && (stem_p.starts_with(&stem_m) || stem_m.starts_with(&stem_p)))
+}
+
+async fn resolve_provider_name(state: &State<'_, AppState>, provider: Option<String>) -> Option<String> {
+    if let Some(req) = provider {
+        if req == "all" || req == "All" || req == "random" || req == "none" || req.is_empty() {
+            Some(req)
+        } else {
+            let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+
+            // 1. Check real providers first (non-placeholder)
+            let real_providers: Vec<_> = engine_providers
+                .iter()
+                .filter(|p| !p.main_url.contains("cloudstream.app"))
+                .collect();
+
+            if let Some(matched) = real_providers.iter().find(|p| p.name.eq_ignore_ascii_case(&req)) {
+                return Some(matched.name.clone());
+            }
+
+            // 2. Stem-based match against real providers (e.g. "CastleTvProvider" -> "Castle TV (Use VLC)")
+            let req_stem = normalize_provider_stem(&req);
+            if !req_stem.is_empty() {
+                if let Some(matched) = real_providers.iter().find(|p| {
+                    let p_stem = normalize_provider_stem(&p.name);
+                    p_stem == req_stem || p_stem.starts_with(&req_stem) || req_stem.starts_with(&p_stem)
+                }) {
+                    return Some(matched.name.clone());
+                }
+            }
+
+            // 3. Exact match against any provider
+            if let Some(matched) = engine_providers.iter().find(|p| p.name.eq_ignore_ascii_case(&req)) {
+                return Some(matched.name.clone());
+            }
+
+            // 4. Fallback: clean alphanumeric match
+            let clean_req = clean_alphanumeric(&req);
+            if let Some(matched) = engine_providers.iter().find(|p| clean_alphanumeric(&p.name) == clean_req) {
+                return Some(matched.name.clone());
+            }
+
+            Some(req)
+        }
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<ExtensionInfo>, String> {
     let mut list = Vec::new();
 
-    // Unified "All Extensions" option
+    let installed_manifests = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+    if installed_manifests.is_empty() {
+        return Ok(list);
+    }
+
+    // Unified "All Extensions" option (only when at least one extension is installed)
     list.push(ExtensionInfo {
         id: "all".to_string(),
         name: "All Extensions".to_string(),
@@ -47,36 +139,59 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
         supported_types: vec!["Movie".to_string(), "TvSeries".to_string(), "Anime".to_string()],
         icon_url: None,
         description: Some("Unified feeds across all installed extensions".to_string()),
+        language: Some("all".to_string()),
+        has_main_page: Some(true),
     });
 
-    let installed_manifests = state.plugin_manager.list_installed_plugins().unwrap_or_default();
     let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+    let mut matched_manifest_ids = std::collections::HashSet::new();
 
     if !engine_providers.is_empty() {
-        for p in engine_providers {
+        // Filter out dummy placeholder APIs (those pointing to cloudstream.app if real APIs exist)
+        let real_providers: Vec<_> = engine_providers
+            .iter()
+            .filter(|p| !p.main_url.contains("cloudstream.app"))
+            .collect();
+        let providers_to_use = if real_providers.is_empty() {
+            engine_providers.iter().collect::<Vec<_>>()
+        } else {
+            real_providers
+        };
+
+        for p in providers_to_use {
             let manifest = installed_manifests.iter().find(|m| {
-                m.name.eq_ignore_ascii_case(&p.name) ||
-                m.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&p.name)
+                is_manifest_provider_match(m, &p.name)
             });
 
-            list.push(ExtensionInfo {
-                id: p.name.to_lowercase().replace(' ', "_"),
-                name: p.name.clone(),
-                is_builtin: false,
-                version: manifest.map(|m| format!("v{}", m.version)),
-                supported_types: if p.supported_types.is_empty() {
-                    vec!["Movie".to_string(), "TvSeries".to_string()]
-                } else {
-                    p.supported_types
-                },
-                icon_url: manifest.and_then(|m| m.icon_url.clone()),
-                description: manifest.and_then(|m| m.description.clone())
-                    .or_else(|| Some(format!("Dynamic .cs3 extension ({})", p.lang))),
-            });
+            if let Some(m) = manifest {
+                matched_manifest_ids.insert(m.id.clone());
+                list.push(ExtensionInfo {
+                    id: p.name.to_lowercase().replace(' ', "_"),
+                    name: p.name.clone(),
+                    is_builtin: false,
+                    version: Some(format!("v{}", m.version)),
+                    supported_types: if p.supported_types.is_empty() {
+                        if m.tv_types.is_empty() {
+                            vec!["Movie".to_string(), "TvSeries".to_string()]
+                        } else {
+                            m.tv_types.clone()
+                        }
+                    } else {
+                        p.supported_types.clone()
+                    },
+                    icon_url: m.icon_url.clone(),
+                    description: m.description.clone()
+                        .or_else(|| Some(format!("Dynamic .cs3 extension ({})", p.lang))),
+                    language: Some(p.lang.clone()),
+                    has_main_page: Some(p.has_main_page),
+                });
+            }
         }
-    } else {
-        // Fallback to installed manifests if engine providers list is still loading
-        for inst in installed_manifests {
+    }
+
+    // Include any installed plugins that haven't registered with engine yet
+    for inst in installed_manifests {
+        if !matched_manifest_ids.contains(&inst.id) {
             list.push(ExtensionInfo {
                 id: inst.id,
                 name: inst.name,
@@ -89,6 +204,8 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
                 },
                 icon_url: inst.icon_url,
                 description: inst.description,
+                language: inst.language,
+                has_main_page: Some(true),
             });
         }
     }
@@ -99,50 +216,125 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
 #[tauri::command]
 async fn get_home_catalog(
     provider: Option<String>,
+    page: Option<i32>,
     state: State<'_, AppState>,
 ) -> Result<Vec<HomePageList>, String> {
-    let mut catalog = state.providers.get_home_page(provider.as_deref()).await;
+    let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+    let page_num = page.unwrap_or(1);
+    let resolved = resolve_provider_name(&state, provider).await;
+    let mut catalog = if installed.is_empty() {
+        Vec::new()
+    } else {
+        state.providers.get_home_page(resolved.as_deref(), page_num).await
+    };
 
-    // Prepend "Continue Watching" if any history exists
-    if let Ok(history) = state.db.get_watch_history(10) {
-        if !history.is_empty() {
-            let continue_items: Vec<SearchResponse> = history
-                .into_iter()
-                .filter(|h| !h.is_completed && h.position_ms > 15000)
-                .map(|h| SearchResponse {
-                    name: if let Some(ep) = h.episode_num {
-                        format!("{} (S{}E{})", h.title, h.season_num.unwrap_or(1), ep)
-                    } else {
-                        h.title
-                    },
-                    url: h.media_id,
-                    api_name: h.provider_id,
-                    tv_type: models::TvType::Movie,
-                    poster_url: h.poster_url,
-                    year: None,
-                    score: None,
-                    dub_status: None,
-                    latest_episode: h.episode_num,
-                    quality: None,
-                    season: h.season_num,
-                    episode: h.episode_num,
-                })
-                .collect();
+    // Prepend "Continue Watching" only on page 1 if any history exists
+    if page_num == 1 {
+        if let Ok(history) = state.db.get_watch_history(20) {
+            if !history.is_empty() {
+                let continue_items: Vec<SearchResponse> = history
+                    .into_iter()
+                    .filter(|h| !h.is_completed && h.position_ms > 10000)
+                    .map(|h| SearchResponse {
+                        name: if let Some(ep) = h.episode_num {
+                            format!("{} (S{}E{})", h.title, h.season_num.unwrap_or(1), ep)
+                        } else {
+                            h.title
+                        },
+                        url: h.media_id,
+                        api_name: h.provider_id,
+                        tv_type: models::TvType::Movie,
+                        poster_url: h.poster_url,
+                        year: None,
+                        score: None,
+                        dub_status: None,
+                        latest_episode: h.episode_num,
+                        quality: None,
+                        season: h.season_num,
+                        episode: h.episode_num,
+                    })
+                    .collect();
 
-            if !continue_items.is_empty() {
-                catalog.insert(
-                    0,
-                    HomePageList {
-                        name: "Continue Watching".to_string(),
-                        list: continue_items,
-                        is_horizontal: true,
-                    },
-                );
+                if !continue_items.is_empty() {
+                    catalog.insert(
+                        0,
+                        HomePageList {
+                            name: "Continue Watching".to_string(),
+                            list: continue_items,
+                            is_horizontal: true,
+                        },
+                    );
+                }
             }
         }
     }
 
     Ok(catalog)
+}
+
+/// CloudStream `ExpandableHomepageList` parity:
+/// Returns shelves wrapped with pagination state (currentPage=1, hasNext from engine).
+/// The engine's /main_page response doesn't yet expose has_next per-shelf, so we
+/// conservatively set has_next=true for non-empty shelves (real data parity).
+#[tauri::command]
+async fn get_home_shelves(
+    provider: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ExpandableShelf>, String> {
+    let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+    if installed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let resolved = resolve_provider_name(&state, provider).await;
+    let provider_arg = resolved.as_deref();
+    let raw = state.providers.get_home_page(provider_arg, 1).await;
+
+    let shelves: Vec<ExpandableShelf> = raw
+        .into_iter()
+        .filter(|s| !s.list.is_empty())
+        .map(|shelf| {
+            let has_next = shelf.list.len() >= 10; // assume more exist if full page returned
+            ExpandableShelf {
+                list: shelf,
+                current_page: 1,
+                has_next,
+            }
+        })
+        .collect();
+
+    Ok(shelves)
+}
+
+/// CloudStream `expand(categoryName)` parity:
+/// Fetches the next page for a single shelf and returns only the new items.
+#[tauri::command]
+async fn expand_shelf(
+    provider: Option<String>,
+    shelf_name: String,
+    page: i32,
+    state: State<'_, AppState>,
+) -> Result<ExpandableShelf, String> {
+    let resolved = resolve_provider_name(&state, provider).await;
+    let provider_arg = resolved.as_deref();
+    let all_shelves = state.providers.get_home_page(provider_arg, page).await;
+
+    // Find the shelf by name in the page-N response
+    let shelf = all_shelves
+        .into_iter()
+        .find(|s| s.name == shelf_name)
+        .unwrap_or_else(|| HomePageList {
+            name: shelf_name.clone(),
+            list: vec![],
+            is_horizontal: true,
+        });
+
+    let has_next = shelf.list.len() >= 10;
+    Ok(ExpandableShelf {
+        list: shelf,
+        current_page: page,
+        has_next,
+    })
 }
 
 #[tauri::command]
@@ -151,7 +343,12 @@ async fn search_media(
     provider: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchResponse>, String> {
-    Ok(state.providers.search(&query, provider.as_deref()).await)
+    let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+    if installed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolved = resolve_provider_name(&state, provider).await;
+    Ok(state.providers.search(&query, resolved.as_deref()).await)
 }
 
 #[tauri::command]
@@ -178,15 +375,22 @@ async fn search_media_multi(
             list
         }
         _ => {
-            let engine_providers = state.engine.get_providers().await.unwrap_or_default();
-            if !engine_providers.is_empty() {
-                engine_providers.into_iter().map(|p| p.name).collect()
+            let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+            if installed.is_empty() {
+                Vec::new()
             } else {
-                state
-                    .plugin_manager
-                    .list_installed_plugins()
-                    .unwrap_or_default()
+                let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+                engine_providers
                     .into_iter()
+                    .filter(|p| {
+                        installed.iter().any(|m| {
+                            m.name.eq_ignore_ascii_case(&p.name) ||
+                            m.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&p.name) ||
+                            p.name.to_lowercase().replace(' ', "_") == m.id.to_lowercase() ||
+                            p.name.to_lowercase().contains(&m.name.to_lowercase()) ||
+                            m.name.to_lowercase().contains(&p.name.to_lowercase())
+                        })
+                    })
                     .map(|p| p.name)
                     .collect()
             }
@@ -540,22 +744,24 @@ async fn clear_search_history(state: State<'_, AppState>) -> Result<(), String> 
 
 #[tauri::command]
 async fn load_media(provider: String, url: String, state: State<'_, AppState>) -> Result<LoadResponse, String> {
+    let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
     state
         .providers
-        .load(&provider, &url)
+        .load(&resolved, &url)
         .await
         .map_err(|e| format!("Failed to load media: {}", e))
 }
 
 #[tauri::command]
 async fn load_links(provider: String, data: String, state: State<'_, AppState>) -> Result<Vec<ExtractorLink>, String> {
+    let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
     let raw_links = state
         .providers
-        .load_links(&provider, &data)
+        .load_links(&resolved, &data)
         .await
         .map_err(|e| format!("Failed to extract links: {}", e))?;
 
-    println!("[load_links] Extracted {} stream links for provider '{}'", raw_links.len(), provider);
+    println!("[load_links] Extracted {} stream links for provider '{}'", raw_links.len(), resolved);
     for (i, link) in raw_links.iter().enumerate() {
         println!(
             "[load_links] #{}: name='{}', quality={:?}, is_m3u8={}, url='{}'",
@@ -574,6 +780,16 @@ async fn save_watch_progress(item: WatchHistoryItem, state: State<'_, AppState>)
 #[tauri::command]
 async fn get_watch_history(limit: usize, state: State<'_, AppState>) -> Result<Vec<WatchHistoryItem>, String> {
     state.db.get_watch_history(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_media_progress(media_id: String, state: State<'_, AppState>) -> Result<Option<WatchHistoryItem>, String> {
+    state.db.get_progress_for_media(&media_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_media_watch_history(media_id: String, state: State<'_, AppState>) -> Result<Vec<WatchHistoryItem>, String> {
+    state.db.get_media_watch_history(&media_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -603,33 +819,7 @@ async fn remove_watchlist_item(media_id: String, state: State<'_, AppState>) -> 
 
 #[tauri::command]
 async fn get_repositories(state: State<'_, AppState>) -> Result<Vec<RepositoryEntry>, String> {
-    let mut repos = state.db.get_repositories().map_err(|e| e.to_string())?;
-    if repos.is_empty() {
-        let presets = vec![
-            ("Nehal's Server (BDIX & CloudStream)", "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json"),
-            ("Hexated Providers", "https://raw.githubusercontent.com/Hexated/cloudstream-extensions-hexated/master/repo.json"),
-            ("CloudStream Multilingual", "https://raw.githubusercontent.com/recloudstream/cloudstream-extensions-multilingual/master/repo.json"),
-        ];
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        for (name, url) in presets {
-            let entry = RepositoryEntry {
-                name: name.to_string(),
-                url: url.to_string(),
-                icon_url: None,
-                manifest_version: Some(1),
-                plugin_count: 0,
-                added_at: now,
-            };
-            let _ = state.db.save_repository(&entry, "{}");
-        }
-        repos = state.db.get_repositories().map_err(|e| e.to_string())?;
-    }
-    Ok(repos)
+    state.db.get_repositories().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -884,10 +1074,16 @@ pub fn run() {
             let plugin_manager = Arc::new(PluginManager::new(app_data_dir));
             let engine = Arc::new(EngineClient::new(None));
             
-            // Launch background check to ensure .cs3 headless engine is running
+            // Launch background check to ensure .cs3 headless engine is running.
+            // After the engine is fully ready (providers loaded), emit 'engine-ready'
+            // so the frontend can reload the home catalog without a manual refresh.
             let engine_init = engine.clone();
+            let app_handle_for_engine = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 engine_init.ensure_running().await;
+                // Signal frontend: engine + plugins are ready
+                println!("[EngineClient] Emitting engine-ready event to frontend");
+                let _ = app_handle_for_engine.emit("engine-ready", ());
             });
 
             let providers = Arc::new(ProviderRegistry::new(engine.clone(), plugin_manager.clone()));
@@ -934,6 +1130,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_available_extensions,
             get_home_catalog,
+            get_home_shelves,
+            expand_shelf,
             search_media,
             search_media_multi,
             search_media_stream,
@@ -946,6 +1144,8 @@ pub fn run() {
             load_links,
             save_watch_progress,
             get_watch_history,
+            get_media_progress,
+            get_media_watch_history,
             clear_watch_history,
             remove_watch_history_item,
             get_watchlist,

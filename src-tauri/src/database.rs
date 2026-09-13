@@ -204,6 +204,39 @@ impl Database {
         }
     }
 
+    pub fn get_media_watch_history(&self, media_id: &str) -> Result<Vec<WatchHistoryItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, media_id, provider_id, title, poster_url, episode_num, season_num,
+                    episode_name, position_ms, duration_ms, last_watched_at, is_completed
+             FROM watch_history
+             WHERE media_id = ?1
+             ORDER BY season_num ASC, episode_num ASC",
+        )?;
+        let rows = stmt.query_map(params![media_id], |row| {
+            Ok(WatchHistoryItem {
+                id: Some(row.get(0)?),
+                media_id: row.get(1)?,
+                provider_id: row.get(2)?,
+                title: row.get(3)?,
+                poster_url: row.get(4)?,
+                episode_num: row.get(5)?,
+                season_num: row.get(6)?,
+                episode_name: row.get(7)?,
+                position_ms: row.get(8)?,
+                duration_ms: row.get(9)?,
+                last_watched_at: row.get(10)?,
+                is_completed: row.get::<_, i64>(11)? == 1,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
     pub fn get_watchlist(&self) -> Result<Vec<WatchlistItem>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

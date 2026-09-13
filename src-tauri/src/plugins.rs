@@ -34,7 +34,9 @@ impl PluginManager {
 
     pub fn normalize_repo_url(url: &str) -> String {
         let mut clean = url.trim().to_string();
-        if clean.starts_with("cloudstreamrepo://") {
+        if clean.starts_with('!') {
+            clean = format!("https://py.md/{}", &clean[1..]);
+        } else if clean.starts_with("cloudstreamrepo://") {
             clean = clean.replace("cloudstreamrepo://", "https://");
         } else if clean.starts_with("https://cs.repo/?") || clean.starts_with("https://cs.repo?") {
             clean = clean.replace("https://cs.repo/?", "https://").replace("https://cs.repo?", "https://");
@@ -321,15 +323,22 @@ impl PluginManager {
     }
 
     pub fn delete_plugin(&self, plugin_name: &str) -> Result<()> {
-        let safe_name = plugin_name.replace(' ', "_");
-        let cs3_path = self.plugins_dir.join(format!("{}.cs3", safe_name));
-        let jar_path = self.plugins_dir.join(format!("{}.jar", safe_name));
+        let safe_name = plugin_name.replace(' ', "_").to_lowercase();
+        let query_lower = plugin_name.to_lowercase();
 
-        if cs3_path.exists() {
-            fs::remove_file(cs3_path)?;
-        }
-        if jar_path.exists() {
-            fs::remove_file(jar_path)?;
+        if self.plugins_dir.exists() {
+            for entry in fs::read_dir(&self.plugins_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if stem == safe_name || stem == query_lower {
+                    let _ = fs::remove_file(&path);
+                }
+            }
         }
         Ok(())
     }

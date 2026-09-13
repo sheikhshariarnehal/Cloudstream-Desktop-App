@@ -1,16 +1,21 @@
 import React, { useState } from 'react';
 import { SearchResponse } from '../types';
 import { MediaCard } from './MediaCard';
-import { X, Search, Trash2, SlidersHorizontal } from 'lucide-react';
+import { X, Search, Trash2, SlidersHorizontal, Loader2 } from 'lucide-react';
 
 interface ExpandedShelfModalProps {
   title: string;
   items: SearchResponse[];
   onClose: () => void;
   onSelectItem: (item: SearchResponse) => void;
+  onPlayItem?: (item: SearchResponse) => void;
+  onRemoveItem?: (item: SearchResponse) => void;
   actionType?: 'continue_watching' | 'watchlist' | 'provider';
   onClearHistory?: () => void;
   progressMap?: Record<string, number>;
+  hasNext?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 export const ExpandedShelfModal: React.FC<ExpandedShelfModalProps> = ({
@@ -18,9 +23,14 @@ export const ExpandedShelfModal: React.FC<ExpandedShelfModalProps> = ({
   items,
   onClose,
   onSelectItem,
+  onPlayItem,
+  onRemoveItem,
   actionType,
   onClearHistory,
   progressMap,
+  hasNext,
+  isLoadingMore,
+  onLoadMore,
 }) => {
   const [filterQuery, setFilterQuery] = useState('');
   const [sortOption, setSortOption] = useState<'default' | 'rating' | 'name' | 'year'>('default');
@@ -123,19 +133,64 @@ export const ExpandedShelfModal: React.FC<ExpandedShelfModalProps> = ({
               <p>No media matched your filter "{filterQuery}".</p>
             </div>
           ) : (
-            <div className="stremio-shelf-grid">
-              {sorted.map((item) => (
-                <MediaCard
-                  key={item.url}
-                  item={item}
-                  progressPercent={progressMap ? progressMap[item.url] : undefined}
-                  onClick={(media) => {
-                    onSelectItem(media);
-                    onClose();
-                  }}
-                />
-              ))}
-            </div>
+            <>
+              <div className="stremio-shelf-grid">
+                {sorted.map((item) => (
+                  <MediaCard
+                    key={item.url}
+                    item={item}
+                    progressPercent={progressMap ? progressMap[item.url] : undefined}
+                    onClick={(media) => {
+                      onSelectItem(media);
+                      onClose();
+                    }}
+                    onPlay={
+                      onPlayItem
+                        ? (media) => {
+                            onPlayItem(media);
+                            onClose();
+                          }
+                        : undefined
+                    }
+                    onRemove={onRemoveItem ? (media) => onRemoveItem(media) : undefined}
+                  />
+                ))}
+              </div>
+
+              {/* CloudStream expand() pagination footer */}
+              {hasNext && onLoadMore && (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0 12px' }}>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={onLoadMore}
+                    disabled={isLoadingMore}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '10px 24px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      borderRadius: '8px',
+                      opacity: isLoadingMore ? 0.7 : 1,
+                      cursor: isLoadingMore ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {isLoadingMore ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Loading more titles...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Load Next Page</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

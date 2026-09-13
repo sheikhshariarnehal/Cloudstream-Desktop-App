@@ -1,14 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   Episode,
   ExtractorLink,
   ExtensionInfo,
   HomePageList,
+  ExpandableShelf,
   SearchResponse,
   WatchHistoryItem,
   WatchlistItem,
   WatchStatusFilter,
+  getFlagFromIso,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MediaCard } from './components/MediaCard';
@@ -19,6 +23,7 @@ import { SearchScreen } from './screens/SearchScreen';
 import { SearchSuggestionsDropdown } from './components/search/SearchSuggestionsDropdown';
 import { SearchFilterDropdown } from './components/search/SearchFilterDropdown';
 import { useSearchEngine } from './hooks/useSearchEngine';
+import { useHomeViewModel } from './hooks/useHomeViewModel';
 import { ExpandedShelfModal } from './components/ExpandedShelfModal';
 import { MediaShelf } from './components/MediaShelf';
 import { HeroBanner } from './components/HeroBanner';
@@ -40,15 +45,56 @@ import {
   Loader2,
   X,
   SlidersHorizontal,
+  Dices,
+  EyeOff,
+  Tv,
+  Sparkles,
+  Heart,
+  Smile,
+  Compass,
+  Radio,
+  ShieldAlert,
 } from 'lucide-react';
 import './App.css';
+
+// CloudStream Android Main Page Categories (tvtypes_chips.xml & TvType enum parity)
+export type CloudStreamCategory =
+  | 'All'
+  | 'Movies'
+  | 'TV Series'
+  | 'Anime'
+  | 'Asian Dramas'
+  | 'Cartoons'
+  | 'Documentaries'
+  | 'Livestreams'
+  | 'Torrents'
+  | 'NSFW'
+  | 'Others';
+
+export interface CategoryDef {
+  id: CloudStreamCategory;
+  label: string;
+  icon: React.ComponentType<{ size?: number }>;
+  types: string[];
+}
+
+export const CLOUDSTREAM_CATEGORIES: CategoryDef[] = [
+  { id: 'All', label: 'All Titles', icon: Film, types: [] },
+  { id: 'Movies', label: 'Movies', icon: Film, types: ['Movie', 'AnimeMovie'] },
+  { id: 'TV Series', label: 'TV Series', icon: Tv, types: ['TvSeries'] },
+  { id: 'Anime', label: 'Anime', icon: Sparkles, types: ['Anime', 'AnimeMovie', 'OVA'] },
+  { id: 'Asian Dramas', label: 'Asian Dramas', icon: Heart, types: ['AsianDrama'] },
+  { id: 'Cartoons', label: 'Cartoons', icon: Smile, types: ['Cartoon'] },
+  { id: 'Documentaries', label: 'Documentaries', icon: Compass, types: ['Documentary'] },
+  { id: 'Livestreams', label: 'Livestreams', icon: Radio, types: ['LiveStream', 'Live'] },
+  { id: 'Torrents', label: 'Torrents', icon: Download, types: ['Torrent'] },
+  { id: 'NSFW', label: 'NSFW', icon: ShieldAlert, types: ['NSFW'] },
+  { id: 'Others', label: 'Others', icon: Folder, types: ['Other', 'Others'] },
+];
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
   const [sourceFilterDropdownOpen, setSourceFilterDropdownOpen] = useState(false);
-  const [catalog, setCatalog] = useState<HomePageList[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Extensions / Providers state
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
@@ -59,6 +105,22 @@ export const App: React.FC = () => {
       return 'all';
     }
   });
+
+  // Home ViewModel (CloudStream HomeViewModel parity)
+  const {
+    shelves,
+    loadingShelves,
+    isRefreshing,
+    setIsRefreshing,
+    heroDetails,
+    expandingShelf,
+    loadHome,
+    expandShelf,
+  } = useHomeViewModel(selectedExtension);
+
+  // Derived catalog for backward compatibility with picker/search
+  const catalog: HomePageList[] = React.useMemo(() => shelves.map((s) => s.list), [shelves]);
+
   const [showExtensionDropdown, setShowExtensionDropdown] = useState(false);
   const [extensionSearchQuery, setExtensionSearchQuery] = useState('');
   const [selectedTvTypes, setSelectedTvTypes] = useState<string[]>([]);
@@ -85,13 +147,14 @@ export const App: React.FC = () => {
     });
   };
 
-  // Home Filters & Shelf Expansion
-  const [boardCategory, setBoardCategory] = useState<'All' | 'Movies' | 'Series' | 'Anime'>('All');
+  // CloudStream Main Page Categories (tvtypes_chips & TvType parity)
+  const [boardCategory, setBoardCategory] = useState<CloudStreamCategory>('All');
   const [bookmarkFilter, setBookmarkFilter] = useState<WatchStatusFilter>('all');
   const [expandedShelf, setExpandedShelf] = useState<{
     title: string;
     items: SearchResponse[];
     actionType?: 'continue_watching' | 'watchlist' | 'provider';
+    shelfName?: string;
   } | null>(null);
 
   // Search state powered by CloudStream Search Engine
@@ -133,6 +196,20 @@ export const App: React.FC = () => {
     try {
       const exts: ExtensionInfo[] = await invoke('get_available_extensions');
       setExtensions(exts);
+
+      // Validate selectedExtension
+      const saved = localStorage.getItem('cloudstream_selected_extension') || 'all';
+      const isSpecial = saved === 'all' || saved === 'random' || saved === 'none';
+      const exists = exts.some(
+        (e) => e.name.toLowerCase() === saved.toLowerCase() || e.id.toLowerCase() === saved.toLowerCase()
+      );
+
+      if (exts.length === 0 || (!isSpecial && !exists)) {
+        setSelectedExtension('all');
+        try {
+          localStorage.setItem('cloudstream_selected_extension', 'all');
+        } catch {}
+      }
     } catch (e) {
       console.error('Failed to load extensions:', e);
     }
@@ -152,11 +229,11 @@ export const App: React.FC = () => {
     }
   };
 
-  // Toggle watchlist for an item (Stremio parity)
-  const handleToggleWatchlist = async (media: SearchResponse) => {
+  // Toggle or set watchlist status for an item (CloudStream Bookmark parity)
+  const handleSetWatchlistStatus = async (media: SearchResponse, status?: string) => {
     try {
-      const isWatchlisted = watchlist.some((w) => w.media_id === media.url);
-      if (isWatchlisted) {
+      const existing = watchlist.find((w) => w.media_id === media.url);
+      if (!status || (existing && existing.status === status)) {
         await invoke('remove_watchlist_item', { mediaId: media.url });
       } else {
         await invoke('set_watchlist_item', {
@@ -166,7 +243,7 @@ export const App: React.FC = () => {
             title: media.name,
             poster_url: media.poster_url,
             tv_type: media.tv_type,
-            status: 'watching',
+            status: (status as any) || 'watching',
             score: media.score,
             added_at: Date.now(),
           },
@@ -174,12 +251,82 @@ export const App: React.FC = () => {
       }
       await loadLibraryData();
     } catch (e) {
-      console.error('Watchlist toggle error:', e);
+      console.error('Watchlist status error:', e);
     }
   };
 
   const isInWatchlist = (media: SearchResponse) => {
     return watchlist.some((w) => w.media_id === media.url);
+  };
+
+  const getWatchlistStatus = (media: SearchResponse): string | undefined => {
+    return watchlist.find((w) => w.media_id === media.url)?.status;
+  };
+
+  // Remove single item from Continue Watching (CloudStream removeLastWatched parity)
+  const handleRemoveHistoryItem = async (media: SearchResponse) => {
+    try {
+      await invoke('remove_watch_history_item', { mediaId: media.url });
+      await loadLibraryData();
+    } catch (e) {
+      console.error('Failed to remove history item:', e);
+    }
+  };
+
+  // Quick Direct Play (Resume playback or play Ep 1 without modal)
+  const handleQuickPlay = async (media: SearchResponse) => {
+    try {
+      const details: any = await invoke('load_media_details', {
+        provider: media.api_name,
+        url: media.url,
+      });
+
+      const hist = history.find((h) => h.media_id === media.url);
+      let targetEp: Episode | undefined;
+      if (hist && hist.episode_num && details.episodes) {
+        targetEp = details.episodes.find((ep: Episode) => ep.episode === hist.episode_num);
+      }
+      if (!targetEp && details.episodes && details.episodes.length > 0) {
+        targetEp = details.episodes[0];
+      }
+
+      if (targetEp) {
+        const links: ExtractorLink[] = await invoke('extract_episode_links', {
+          provider: media.api_name,
+          data: targetEp.data,
+        });
+        if (links.length > 0) {
+          setPlayerState({
+            item: media,
+            episode: targetEp,
+            links,
+          });
+          return;
+        }
+      }
+      setSelectedItem(media);
+    } catch (e) {
+      console.error('Quick play fallback to details modal:', e);
+      setSelectedItem(media);
+    }
+  };
+
+  // Random Media Picker (CloudStream home_random parity)
+  const handlePickRandomItem = () => {
+    const allItems = Array.from(
+      new Map(
+        [
+          ...catalog.flatMap((s) => s.list),
+          ...continueWatchingItems,
+          ...bookmarkSearchItems,
+        ]
+          .filter((it) => it.url && it.name)
+          .map((it) => [it.url, it])
+      ).values()
+    );
+    if (allItems.length === 0) return;
+    const picked = allItems[Math.floor(Math.random() * allItems.length)];
+    setSelectedItem(picked);
   };
 
   // Clear Watch History (CloudStream deleteResumeWatching parity)
@@ -198,22 +345,6 @@ export const App: React.FC = () => {
     setIsRefreshing(true);
     await Promise.all([loadHome(), loadLibraryData()]);
     setTimeout(() => setIsRefreshing(false), 400);
-  };
-
-  // Load Home Catalog
-  const loadHome = async (extName?: string) => {
-    setLoadingCatalog(true);
-    const target = extName !== undefined ? extName : selectedExtension;
-    try {
-      const data: HomePageList[] = await invoke('get_home_catalog', {
-        provider: target === 'all' || target === 'All Extensions' ? null : target,
-      });
-      setCatalog(data);
-    } catch (e) {
-      console.error('Failed to load home catalog:', e);
-    } finally {
-      setLoadingCatalog(false);
-    }
   };
 
   // Close dropdowns on click outside
@@ -236,6 +367,17 @@ export const App: React.FC = () => {
     const initialExt = localStorage.getItem('cloudstream_selected_extension') || 'all';
     loadHome(initialExt);
     loadLibraryData();
+
+    // When the Rust backend finishes starting the engine + loading all plugins,
+    // it emits 'engine-ready'. Auto-reload so the user never sees an empty page.
+    const unlisten = listen('engine-ready', () => {
+      console.log('[App] engine-ready received — reloading extensions + home');
+      loadExtensions();
+      const ext = localStorage.getItem('cloudstream_selected_extension') || 'all';
+      loadHome(ext);
+    });
+
+    return () => { unlisten.then(fn => fn()); };
   }, []);
 
   const handleSelectExtension = (extName: string) => {
@@ -385,11 +527,13 @@ export const App: React.FC = () => {
       name: h.title,
       url: h.media_id,
       api_name: h.provider_id,
-      tv_type: 'Movie',
+      // Use actual tv_type from DB, fall back to Movie only if unknown
+      tv_type: (h.tv_type as any) || 'Movie',
       poster_url: h.poster_url,
-      season: h.season_num || 1,
-      episode: h.episode_num,
-      latest_episode: h.episode_num,
+      // Don't force season=1 for movies — leave undefined so no S1:E1 badge
+      season: h.tv_type === 'Movie' ? undefined : (h.season_num ?? undefined),
+      episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
+      latest_episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
     }));
 
   const historyProgressMap: Record<string, number> = {};
@@ -423,14 +567,14 @@ export const App: React.FC = () => {
     dropped: watchlist.filter((w) => w.status === 'dropped').length,
   };
 
-  // Provider Shelves
-  const filteredShelves = catalog.filter((s) => s.name !== 'Continue Watching');
+  // Provider Shelves (ExpandableShelf parity)
+  const filteredShelves = shelves.filter((s) => s.list.name !== 'Continue Watching');
 
   // Stremio Hero Spotlight items
   const heroBannerItems = React.useMemo(() => {
     const items: SearchResponse[] = [];
-    for (const shelf of catalog) {
-      for (const item of shelf.list) {
+    for (const shelf of shelves) {
+      for (const item of shelf.list.list) {
         if (item.poster_url && !items.some((existing) => existing.url === item.url)) {
           items.push(item);
         }
@@ -439,23 +583,141 @@ export const App: React.FC = () => {
       if (items.length >= 8) break;
     }
     return items;
-  }, [catalog]);
+  }, [shelves]);
 
-  // Filter shelves based on board category
+  // CloudStream category matching parity
+  const itemMatchesCategory = (item: SearchResponse, cat: CloudStreamCategory): boolean => {
+    if (cat === 'All') return true;
+    const t = (item.tv_type || '').toLowerCase();
+    switch (cat) {
+      case 'Movies':
+        return t === 'movie' || t === 'animemovie';
+      case 'TV Series':
+        return t === 'tvseries';
+      case 'Anime':
+        return t === 'anime' || t === 'animemovie' || t === 'ova';
+      case 'Asian Dramas':
+        return t === 'asiandrama';
+      case 'Cartoons':
+        return t === 'cartoon';
+      case 'Documentaries':
+        return t === 'documentary';
+      case 'Livestreams':
+        return t === 'livestream' || t === 'live';
+      case 'Torrents':
+        return t === 'torrent';
+      case 'NSFW':
+        return t === 'nsfw';
+      case 'Others':
+        return t === 'other' || t === 'others';
+      default:
+        return true;
+    }
+  };
+
+  const shelfMatchesCategory = (shelf: ExpandableShelf, cat: CloudStreamCategory): boolean => {
+    if (cat === 'All') return true;
+    const title = shelf.list.name.toLowerCase();
+
+    // 1. Keyword matching on shelf title (exact category name from provider)
+    switch (cat) {
+      case 'Movies':
+        if (title.includes('movie') || title.includes('cinema') || title.includes('film')) return true;
+        break;
+      case 'TV Series':
+        if (title.includes('series') || title.includes('tv') || title.includes('show') || title.includes('season')) return true;
+        break;
+      case 'Anime':
+        if (title.includes('anime') || title.includes('donghua') || title.includes('manga')) return true;
+        break;
+      case 'Asian Dramas':
+        if (title.includes('asian') || title.includes('drama') || title.includes('kdrama') || title.includes('k-drama') || title.includes('cdrama') || title.includes('c-drama')) return true;
+        break;
+      case 'Cartoons':
+        if (title.includes('cartoon') || title.includes('animation') || title.includes('animated') || title.includes('kids')) return true;
+        break;
+      case 'Documentaries':
+        if (title.includes('docu')) return true;
+        break;
+      case 'Livestreams':
+        if (title.includes('live') || title.includes('stream') || title.includes('iptv') || title.includes('channel')) return true;
+        break;
+      case 'Torrents':
+        if (title.includes('torrent')) return true;
+        break;
+      case 'NSFW':
+        if (title.includes('nsfw') || title.includes('adult') || title.includes('18+') || title.includes('hentai')) return true;
+        break;
+      case 'Others':
+        if (title.includes('other')) return true;
+        break;
+    }
+
+    // 2. Check if any item in this shelf matches the category
+    return shelf.list.list.some((it: SearchResponse) => itemMatchesCategory(it, cat));
+  };
+
+  // Filter shelves based on board category — also drop empty shelves (no cards = no header)
   const visibleShelves = filteredShelves.filter((shelf) => {
-    if (boardCategory === 'All') return true;
-    const lower = shelf.name.toLowerCase();
-    if (boardCategory === 'Movies') {
-      return lower.includes('movie') || shelf.list.some((it) => it.tv_type === 'Movie');
-    }
-    if (boardCategory === 'Series') {
-      return lower.includes('series') || lower.includes('show') || shelf.list.some((it) => it.tv_type === 'TvSeries');
-    }
-    if (boardCategory === 'Anime') {
-      return lower.includes('anime') || shelf.list.some((it) => it.tv_type === 'Anime');
-    }
-    return true;
+    if (!shelf.list.list || shelf.list.list.length === 0) return false; // hide empty shelves
+    return shelfMatchesCategory(shelf, boardCategory);
   });
+
+  // CloudStream valid categories:
+  // Dynamically compute valid categories matching installed providers or active shelves
+  const visibleCategories = React.useMemo(() => {
+    const supportedTypes = new Set<string>();
+
+    if (selectedExtension === 'all' || selectedExtension === 'random') {
+      extensions.forEach((ext) => {
+        ext.supported_types?.forEach((t) => supportedTypes.add(t.toLowerCase()));
+      });
+    } else {
+      const cur = extensions.find((e) => e.name === selectedExtension || e.id === selectedExtension);
+      cur?.supported_types?.forEach((t) => supportedTypes.add(t.toLowerCase()));
+    }
+
+    shelves.forEach((shelf) => {
+      shelf.list.list.forEach((item) => {
+        if (item.tv_type) supportedTypes.add(item.tv_type.toLowerCase());
+      });
+    });
+
+    if (supportedTypes.size === 0) {
+      return CLOUDSTREAM_CATEGORIES;
+    }
+
+    return CLOUDSTREAM_CATEGORIES.filter((cat) => {
+      if (cat.id === 'All') return true;
+      const matchesType = cat.types.some((t) => supportedTypes.has(t.toLowerCase()));
+      if (matchesType) return true;
+      const catKeyword =
+        cat.id === 'TV Series'
+          ? 'series'
+          : cat.id === 'Asian Dramas'
+          ? 'drama'
+          : cat.id === 'Livestreams'
+          ? 'live'
+          : cat.id.toLowerCase();
+      return shelves.some((s) => s.list.name.toLowerCase().includes(catKeyword));
+    });
+  }, [extensions, selectedExtension, shelves]);
+
+  useEffect(() => {
+    if (!visibleCategories.some((c) => c.id === boardCategory)) {
+      setBoardCategory('All');
+    }
+  }, [visibleCategories, boardCategory]);
+
+  const visibleContinueWatching = React.useMemo(() => {
+    if (boardCategory === 'All') return continueWatchingItems;
+    return continueWatchingItems.filter((it) => itemMatchesCategory(it, boardCategory));
+  }, [continueWatchingItems, boardCategory]);
+
+  const visibleBookmarks = React.useMemo(() => {
+    if (boardCategory === 'All') return bookmarkSearchItems;
+    return bookmarkSearchItems.filter((it) => itemMatchesCategory(it, boardCategory));
+  }, [bookmarkSearchItems, boardCategory]);
 
   const currentExtObj = extensions.find(
     (e) => e.name === selectedExtension || (selectedExtension === 'all' && e.id === 'all')
@@ -472,31 +734,71 @@ export const App: React.FC = () => {
     );
   };
 
+  // CloudStream Virtual Providers (All, Random, None)
+  const virtualExtensions: ExtensionInfo[] = [
+    {
+      id: 'all',
+      name: 'All Extensions',
+      is_builtin: true,
+      version: 'Combined',
+      supported_types: ['Movie', 'TvSeries', 'Anime'],
+      description: 'Unified feeds across all installed extensions',
+      language: 'all',
+      has_main_page: true,
+    },
+    {
+      id: 'random',
+      name: 'Random Aggregator',
+      is_builtin: true,
+      version: 'Shuffle',
+      supported_types: ['Movie', 'TvSeries', 'Anime'],
+      description: 'Dynamic mix of random shelves across providers (CloudStream Random)',
+      language: 'all',
+      has_main_page: true,
+    },
+    {
+      id: 'none',
+      name: 'None (Offline Mode)',
+      is_builtin: true,
+      version: 'Clean',
+      supported_types: ['Movie', 'TvSeries', 'Anime'],
+      description: 'Clean screen. Shows only Continue Watching & Library without network feeds',
+      language: 'all',
+      has_main_page: true,
+    },
+  ];
+
   // Sort & filter extensions:
-  // 1. Filter by search query
-  // 2. Filter by selected TV Types (if any selected)
-  // 3. Pinned extensions appear at the top, followed by alphabetically sorted
-  const sortedDropdownExts = extensions
-    .filter((e) => {
-      if (e.id === 'all') return true;
-      const matchesQuery =
-        e.name.toLowerCase().includes(extensionSearchQuery.toLowerCase()) ||
-        e.description?.toLowerCase().includes(extensionSearchQuery.toLowerCase());
-      if (!matchesQuery) return false;
-      if (selectedTvTypes.length > 0) {
-        return e.supported_types?.some((t) => selectedTvTypes.includes(t));
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      if (a.id === 'all') return -1;
-      if (b.id === 'all') return 1;
-      const aPinned = pinnedExtensions.includes(a.name);
-      const bPinned = pinnedExtensions.includes(b.name);
-      if (aPinned && !bPinned) return -1;
-      if (!aPinned && bPinned) return 1;
-      return a.name.localeCompare(b.name);
-    });
+  // 1. Virtual providers at top
+  // 2. Filter by search query
+  // 3. Filter by selected TV Types (if any selected)
+  // 4. Pinned extensions appear at the top, followed by alphabetically sorted
+  const sortedDropdownExts = [
+    ...virtualExtensions.filter((v) => {
+      if (!extensionSearchQuery) return true;
+      const q = extensionSearchQuery.toLowerCase();
+      return v.name.toLowerCase().includes(q) || v.description?.toLowerCase().includes(q);
+    }),
+    ...extensions
+      .filter((e) => {
+        if (e.id === 'all' || e.id === 'random' || e.id === 'none') return false;
+        const matchesQuery =
+          e.name.toLowerCase().includes(extensionSearchQuery.toLowerCase()) ||
+          e.description?.toLowerCase().includes(extensionSearchQuery.toLowerCase());
+        if (!matchesQuery) return false;
+        if (selectedTvTypes.length > 0) {
+          return e.supported_types?.some((t) => selectedTvTypes.includes(t));
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const aPinned = pinnedExtensions.includes(a.name);
+        const bPinned = pinnedExtensions.includes(b.name);
+        if (aPinned && !bPinned) return -1;
+        if (!aPinned && bPinned) return 1;
+        return a.name.localeCompare(b.name);
+      }),
+  ];
 
   if (playerState) {
     return (
@@ -680,9 +982,34 @@ export const App: React.FC = () => {
                 onClick={() => setShowExtensionDropdown(!showExtensionDropdown)}
                 title="Select or switch active CloudStream extension"
               >
-                <Puzzle size={14} color="var(--stremio-purple-light)" />
+                {extensions.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0 ? (
+                  <Puzzle size={14} color="var(--stremio-purple-light)" />
+                ) : selectedExtension === 'all' ? (
+                  <Globe size={14} color="var(--stremio-purple-light)" />
+                ) : selectedExtension === 'random' || selectedExtension === 'Random Aggregator' ? (
+                  <Dices size={14} color="#f59e0b" />
+                ) : selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)' ? (
+                  <EyeOff size={14} color="#94a3b8" />
+                ) : currentExtObj?.icon_url ? (
+                  <img
+                    src={currentExtObj.icon_url}
+                    alt={currentExtObj.name}
+                    style={{ width: '18px', height: '18px', borderRadius: '4px', objectFit: 'contain' }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                ) : (
+                  <span style={{ fontSize: '14px', lineHeight: 1 }}>{getFlagFromIso(currentExtObj?.language)}</span>
+                )}
                 <span className="stremio-ext-badge-text">
-                  {currentExtObj?.name || (selectedExtension === 'all' ? 'All Extensions' : selectedExtension)}
+                  {extensions.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0
+                    ? 'No Extensions'
+                    : selectedExtension === 'all'
+                    ? 'All Extensions'
+                    : selectedExtension === 'random' || selectedExtension === 'Random Aggregator'
+                    ? 'Random'
+                    : selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)'
+                    ? 'None (Offline)'
+                    : currentExtObj?.name || selectedExtension}
                 </span>
                 <ChevronDown size={13} color="#8e8aa4" />
               </div>
@@ -694,7 +1021,7 @@ export const App: React.FC = () => {
                     <div className="ext-dropdown-title">
                       <span>Source Extensions</span>
                       <span style={{ fontSize: '11.5px', color: '#8e8aa4', fontWeight: 500 }}>
-                        {sortedDropdownExts.filter((e) => e.id !== 'all').length} available
+                        {sortedDropdownExts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length} available
                       </span>
                     </div>
 
@@ -733,7 +1060,15 @@ export const App: React.FC = () => {
                                 transition: 'all 0.15s ease',
                               }}
                             >
-                              {type}
+                              {type === 'TvSeries'
+                                ? 'TV Series'
+                                : type === 'AsianDrama'
+                                ? 'Asian Drama'
+                                : type === 'AnimeMovie'
+                                ? 'Anime Movie'
+                                : type === 'LiveStream'
+                                ? 'Livestream'
+                                : type}
                             </button>
                           );
                         })}
@@ -742,36 +1077,84 @@ export const App: React.FC = () => {
                   </div>
 
                   <div className="ext-dropdown-list">
-                    {sortedDropdownExts.map((ext) => {
+                    {sortedDropdownExts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0 ? (
+                      <div style={{ padding: '28px 16px', textAlign: 'center', color: '#8e8aa4' }}>
+                        <Puzzle size={28} style={{ opacity: 0.35, marginBottom: '8px' }} />
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#f1f0f7' }}>No extensions installed</div>
+                        <div style={{ fontSize: '11.5px', color: '#6a6688', marginTop: '4px' }}>
+                          Add a repository and install extensions in Extension Manager.
+                        </div>
+                      </div>
+                    ) : (
+                    sortedDropdownExts.map((ext) => {
                       const isAll = ext.id === 'all';
-                      const isSelected = selectedExtension === ext.name || (isAll && selectedExtension === 'all');
+                      const isRandom = ext.id === 'random';
+                      const isNone = ext.id === 'none';
+                      const isVirtual = isAll || isRandom || isNone;
+                      const isSelected =
+                        selectedExtension === ext.name ||
+                        (isAll && selectedExtension === 'all') ||
+                        (isRandom && selectedExtension === 'random') ||
+                        (isNone && selectedExtension === 'none');
                       const isPinned = pinnedExtensions.includes(ext.name);
 
                       return (
                         <div
                           key={ext.id}
                           className={`ext-option-item ${isSelected ? 'active' : ''}`}
-                          onClick={() => handleSelectExtension(isAll ? 'all' : ext.name)}
+                          onClick={() => handleSelectExtension(isAll ? 'all' : isRandom ? 'random' : isNone ? 'none' : ext.name)}
                           style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                         >
                           <div className="ext-option-left" style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                             {isAll ? (
                               <Globe size={15} color="var(--stremio-purple-light)" />
+                            ) : isRandom ? (
+                              <Dices size={15} color="#f59e0b" />
+                            ) : isNone ? (
+                              <EyeOff size={15} color="#94a3b8" />
+                            ) : ext.icon_url ? (
+                              <img
+                                src={ext.icon_url}
+                                alt={ext.name}
+                                style={{
+                                  width: '22px',
+                                  height: '22px',
+                                  borderRadius: '5px',
+                                  objectFit: 'contain',
+                                  background: 'rgba(255,255,255,0.04)',
+                                  flexShrink: 0,
+                                }}
+                                onError={(ev) => {
+                                  ev.currentTarget.style.display = 'none';
+                                  const sibling = ev.currentTarget.nextElementSibling as HTMLElement | null;
+                                  if (sibling) sibling.style.display = 'inline';
+                                }}
+                              />
                             ) : (
-                              <Puzzle size={15} color="var(--stremio-purple-light)" />
+                              <span className="ext-option-flag" title={ext.language || 'Multi'}>
+                                {getFlagFromIso(ext.language)}
+                              </span>
+                            )}
+                            {/* Fallback flag shown only when image fails */}
+                            {!isVirtual && ext.icon_url && (
+                              <span className="ext-option-flag" style={{ display: 'none' }} title={ext.language || 'Multi'}>
+                                {getFlagFromIso(ext.language)}
+                              </span>
                             )}
                             <span className="ext-option-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {ext.name}
                             </span>
-                            {ext.version && (
+                            {isRandom && <span className="ext-virtual-tag random">RANDOM</span>}
+                            {isNone && <span className="ext-virtual-tag none">OFFLINE</span>}
+                            {ext.version && !isVirtual && (
                               <span style={{ fontSize: '10px', color: '#726e8c' }}>
-                                v{ext.version}
+                                {ext.version}
                               </span>
                             )}
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                            {!isAll && (
+                            {!isVirtual && (
                               <button
                                 type="button"
                                 title={isPinned ? 'Unpin extension' : 'Pin extension to top'}
@@ -794,7 +1177,8 @@ export const App: React.FC = () => {
                           </div>
                         </div>
                       );
-                    })}
+                    })
+                  )}
                   </div>
 
                   <div className="ext-dropdown-footer">
@@ -824,14 +1208,23 @@ export const App: React.FC = () => {
               )}
             </div>
 
+            {/* CloudStream home_random Parity: Pick Random Title */}
+            <button
+              className="stremio-icon-btn"
+              onClick={handlePickRandomItem}
+              title="Surprise me with a random movie/series (CloudStream Random)"
+            >
+              <Dices size={16} />
+            </button>
+
             {/* Refresh Catalog Button */}
             <button
               className="stremio-icon-btn"
               onClick={handleRefresh}
               title="Refresh provider catalog"
-              disabled={loadingCatalog || isRefreshing}
+              disabled={loadingShelves || isRefreshing}
             >
-              <RefreshCw size={15} className={isRefreshing || loadingCatalog ? 'animate-spin' : ''} />
+              <RefreshCw size={15} className={isRefreshing || loadingShelves ? 'animate-spin' : ''} />
             </button>
 
             {/* Fullscreen Button */}
@@ -905,82 +1298,128 @@ export const App: React.FC = () => {
                     Open Extension Manager
                   </button>
                 </div>
-              ) : loadingCatalog ? (
+              ) : loadingShelves ? (
                 <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
                   <div style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
                     <RefreshCw size={18} className="animate-spin" />
                     Loading catalog from {selectedExtension === 'all' ? 'active extensions' : selectedExtension}...
                   </div>
                 </div>
-              ) : catalog.length === 0 && continueWatchingItems.length === 0 && watchlist.length === 0 ? (
-                <div
-                  style={{
-                    padding: '60px 40px',
-                    textAlign: 'center',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '16px',
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    margin: '40px 36px',
-                    borderRadius: '16px',
-                    border: '1px dashed rgba(255, 255, 255, 0.08)',
-                  }}
-                >
-                  <Globe size={40} color="#64748b" />
-                  <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
-                    No Media Returned for {selectedExtension}
-                  </h3>
-                  <p style={{ color: '#94a3b8', fontSize: '13.5px', maxWidth: '440px', margin: 0 }}>
-                    Could not load shelves from this extension. Ensure your network has BDIX connectivity, or select another extension.
-                  </p>
-                  <button className="btn-secondary" onClick={() => setActiveTab('plugins')}>
-                    Manage Extensions
-                  </button>
-                </div>
+              ) : shelves.length === 0 && continueWatchingItems.length === 0 && watchlist.length === 0 ? (
+                selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)' ? (
+                  <div
+                    style={{
+                      padding: '60px 40px',
+                      textAlign: 'center',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '16px',
+                      background: 'rgba(255, 255, 255, 0.02)',
+                      margin: '40px 36px',
+                      borderRadius: '16px',
+                      border: '1px dashed rgba(255, 255, 255, 0.08)',
+                    }}
+                  >
+                    <EyeOff size={40} color="#94a3b8" />
+                    <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
+                      Offline / Minimalist Mode Active
+                    </h3>
+                    <p style={{ color: '#94a3b8', fontSize: '13.5px', maxWidth: '480px', margin: 0 }}>
+                      Provider feeds are hidden (CloudStream None mode). You can use search, continue watching your existing shows, or browse your local library.
+                    </p>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => handleSelectExtension('all')}
+                      style={{ marginTop: '4px' }}
+                    >
+                      Show All Extensions
+                    </button>
+                  </div>
+                ) : (
+                  <div className="home-error-card">
+                    <Globe size={42} color="#f59e0b" />
+                    <h3>No Media Returned for {selectedExtension}</h3>
+                    <p>
+                      Could not load shelves from this extension. Ensure your network has proper connectivity (or BDIX if required), or verify if the provider requires web verification.
+                    </p>
+                    <div className="home-error-actions">
+                      <button
+                        className="btn-secondary"
+                        onClick={async () => {
+                          try {
+                            const extInfo = extensions.find((e) => e.name === selectedExtension);
+                            await openUrl(extInfo?.icon_url || 'https://google.com/search?q=' + encodeURIComponent(selectedExtension));
+                          } catch (e) {
+                            console.error(e);
+                          }
+                        }}
+                      >
+                        Check Provider Online
+                      </button>
+                      <button className="btn-secondary" onClick={() => setShowExtensionDropdown(true)}>
+                        Switch Provider
+                      </button>
+                      <button className="btn-secondary" onClick={() => setActiveTab('plugins')}>
+                        Extension Manager
+                      </button>
+                      <button className="btn-primary" onClick={handleRefresh}>
+                        Retry Reload
+                      </button>
+                    </div>
+                  </div>
+                )
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
                 <div>
-                  {/* Stremio Hero Spotlight Carousel */}
+                  {/* Stremio Hero Spotlight Carousel with CloudStream Preview Parity */}
                   {heroBannerItems.length > 0 && (
                     <HeroBanner
                       items={heroBannerItems}
+                      loadedDetails={heroDetails}
                       onSelectItem={setSelectedItem}
-                      onToggleWatchlist={handleToggleWatchlist}
+                      onPlayItem={handleQuickPlay}
+                      onToggleWatchlist={handleSetWatchlistStatus}
                       isInWatchlist={isInWatchlist}
+                      currentWatchStatus={getWatchlistStatus}
                     />
                   )}
 
-                  {/* Stremio Board Quick Category Filter Pills */}
-                  <div className="stremio-category-bar">
-                    {(['All', 'Movies', 'Series', 'Anime'] as const).map((cat) => (
-                      <button
-                        key={cat}
-                        className={`stremio-category-pill ${boardCategory === cat ? 'active' : ''}`}
-                        onClick={() => setBoardCategory(cat)}
-                      >
-                        {cat === 'All' && <Film size={13} />}
-                        {cat === 'Movies' && <Film size={13} />}
-                        {cat === 'Series' && <Calendar size={13} />}
-                        {cat === 'Anime' && <Folder size={13} />}
-                        <span>{cat === 'All' ? 'All Titles' : cat}</span>
-                      </button>
-                    ))}
-                  </div>
+                  {/* CloudStream Home Page Category Chips (tvtypes_chips & TvType parity) */}
+                  {visibleCategories.length > 1 && (
+                    <div className="stremio-category-bar">
+                      {visibleCategories.map((cat) => {
+                        const IconComponent = cat.icon;
+                        const isActive = boardCategory === cat.id;
+                        return (
+                          <button
+                            key={cat.id}
+                            className={`stremio-category-pill ${isActive ? 'active' : ''}`}
+                            onClick={() => setBoardCategory(cat.id)}
+                          >
+                            <IconComponent size={13} />
+                            <span>{cat.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="stremio-board-container">
                     {/* 1. Continue Watching Shelf (Top Shelf - CloudStream getResumeWatching Parity) */}
-                    {(boardCategory === 'All' || boardCategory === 'Series') && continueWatchingItems.length > 0 && (
+                    {visibleContinueWatching.length > 0 && (
                       <MediaShelf
                         title="Continue Watching"
-                        items={continueWatchingItems}
+                        items={visibleContinueWatching}
                         progressMap={historyProgressMap}
                         onSelectItem={setSelectedItem}
+                        onPlayItem={handleQuickPlay}
+                        onRemoveItem={handleRemoveHistoryItem}
                         onSeeAll={() =>
                           setExpandedShelf({
                             title: 'Continue Watching',
-                            items: continueWatchingItems,
+                            items: visibleContinueWatching,
                             actionType: 'continue_watching',
                           })
                         }
@@ -1002,15 +1441,16 @@ export const App: React.FC = () => {
                     )}
 
                     {/* 2. My Library / Bookmarks Shelf (CloudStream loadStoredData Parity) */}
-                    {boardCategory === 'All' && watchlist.length > 0 && (
+                    {visibleBookmarks.length > 0 && (
                       <MediaShelf
                         title="My Library"
-                        items={bookmarkSearchItems}
+                        items={visibleBookmarks}
                         onSelectItem={setSelectedItem}
+                        onPlayItem={handleQuickPlay}
                         onSeeAll={() =>
                           setExpandedShelf({
                             title: `My Library (${bookmarkFilter === 'all' ? 'All' : bookmarkFilter.replace('_', ' ')})`,
-                            items: bookmarkSearchItems,
+                            items: visibleBookmarks,
                             actionType: 'watchlist',
                           })
                         }
@@ -1067,31 +1507,33 @@ export const App: React.FC = () => {
                       />
                     )}
 
-                    {/* 3. Provider Shelves (8-Card Carousels with < and > Nav) */}
+                    {/* 3. Provider Shelves (CloudStream HomePageList category shelves) */}
                     {visibleShelves.map((shelf) => {
-                      const lower = shelf.name.toLowerCase();
-                      let displayTitle = shelf.name;
-                      if (lower.includes('movie')) {
-                        displayTitle = 'Popular - Movie';
-                      } else if (lower.includes('series') || lower.includes('tv') || lower.includes('show')) {
-                        displayTitle = 'Popular - Series';
-                      } else if (lower.includes('anime')) {
-                        displayTitle = 'Popular - Anime';
-                      } else if (!lower.startsWith('popular')) {
-                        displayTitle = `Popular - ${shelf.name}`;
-                      }
+                      const displayTitle = shelf.list.name;
+                      const shelfItems =
+                        boardCategory === 'All'
+                          ? shelf.list.list
+                          : shelf.list.list.filter((it) => itemMatchesCategory(it, boardCategory)).length > 0
+                          ? shelf.list.list.filter((it) => itemMatchesCategory(it, boardCategory))
+                          : shelf.list.list;
 
                       return (
                         <MediaShelf
-                          key={shelf.name}
+                          key={shelf.list.name}
                           title={displayTitle}
-                          items={shelf.list}
+                          isHorizontal={shelf.list.is_horizontal}
+                          items={shelfItems}
+                          hasNext={shelf.has_next}
+                          isLoadingMore={expandingShelf && expandedShelf?.shelfName === shelf.list.name}
+                          onLoadMore={() => expandShelf(shelf.list.name)}
                           onSelectItem={setSelectedItem}
+                          onPlayItem={handleQuickPlay}
                           onSeeAll={() =>
                             setExpandedShelf({
                               title: displayTitle,
-                              items: shelf.list,
+                              items: shelf.list.list,
                               actionType: 'provider',
+                              shelfName: shelf.list.name,
                             })
                           }
                         />
@@ -1255,8 +1697,13 @@ export const App: React.FC = () => {
           {activeTab === 'plugins' && (
             <PluginsScreen
               onExtensionsChanged={() => {
-                loadExtensions();
-                loadHome();
+                // Give the engine 2s to fully process /reload before re-fetching
+                // extensions and home — otherwise newly installed .cs3 plugins
+                // won't appear in the provider list yet.
+                setTimeout(async () => {
+                  await loadExtensions();
+                  await loadHome();
+                }, 2000);
               }}
               onSelectExtension={(name) => {
                 setActiveTab('home');
@@ -1308,6 +1755,9 @@ export const App: React.FC = () => {
             setSelectedItem(null);
             setPlayerState({ item, episode, links });
           }}
+          onSelectItem={(newItem: SearchResponse) => {
+            setSelectedItem(newItem);
+          }}
         />
       )}
 
@@ -1316,17 +1766,38 @@ export const App: React.FC = () => {
 
 
       {/* Expanded Shelf Modal ("See All" - CloudStream Parity) */}
-      {expandedShelf && (
-        <ExpandedShelfModal
-          title={expandedShelf.title}
-          items={expandedShelf.items}
-          actionType={expandedShelf.actionType}
-          progressMap={historyProgressMap}
-          onClearHistory={handleClearHistory}
-          onClose={() => setExpandedShelf(null)}
-          onSelectItem={setSelectedItem}
-        />
-      )}
+      {expandedShelf && (() => {
+        const matchingShelf = expandedShelf.shelfName
+          ? shelves.find((s) => s.list.name === expandedShelf.shelfName)
+          : null;
+        const currentItems = matchingShelf ? matchingShelf.list.list : expandedShelf.items;
+        const hasNext = matchingShelf ? matchingShelf.has_next : false;
+
+        return (
+          <ExpandedShelfModal
+            title={expandedShelf.title}
+            items={currentItems}
+            actionType={expandedShelf.actionType}
+            progressMap={historyProgressMap}
+            hasNext={hasNext}
+            isLoadingMore={expandingShelf}
+            onLoadMore={
+              matchingShelf
+                ? () => expandShelf(matchingShelf.list.name)
+                : undefined
+            }
+            onClearHistory={handleClearHistory}
+            onClose={() => setExpandedShelf(null)}
+            onSelectItem={setSelectedItem}
+            onPlayItem={handleQuickPlay}
+            onRemoveItem={
+              expandedShelf.actionType === 'continue_watching'
+                ? handleRemoveHistoryItem
+                : undefined
+            }
+          />
+        );
+      })()}
     </div>
   );
 };

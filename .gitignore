@@ -31,6 +31,8 @@ src-tauri/gen/schemas
 # Native dynamic libraries generated at build time
 src-tauri/libmpv/*.dll
 src-tauri/libmpv/*.lib
+*.jar
+src-tauri/*.jar
 
 # Environment & Sensitive
 .env

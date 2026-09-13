@@ -86,11 +86,35 @@ pub struct HomePageList {
     pub is_horizontal: bool,
 }
 
+/// CloudStream `ExpandableHomepageList` parity:
+/// wraps a shelf row with pagination state so the frontend
+/// can request the next page independently per shelf.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpandableShelf {
+    pub list: HomePageList,
+    pub current_page: i32,
+    pub has_next: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Actor {
     pub name: String,
     pub role: Option<String>,
     pub image: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeasonData {
+    pub season: i32,
+    pub name: Option<String>,
+    pub display_season: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextAiring {
+    pub episode: i32,
+    pub unix_time: i64,
+    pub season: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +127,8 @@ pub struct Episode {
     pub rating: Option<f64>,
     pub description: Option<String>,
     pub release_date: Option<String>,
+    #[serde(default)]
+    pub dub_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +148,24 @@ pub struct LoadResponse {
     pub recommendations: Vec<SearchResponse>,
     pub trailers: Vec<String>,
     pub sync_ids: HashMap<String, String>,
+    #[serde(default)]
+    pub score: Option<f64>,
+    #[serde(default)]
+    pub content_rating: Option<String>,
+    #[serde(default)]
+    pub coming_soon: Option<bool>,
+    #[serde(default)]
+    pub season_names: Option<Vec<SeasonData>>,
+    #[serde(default)]
+    pub next_airing: Option<NextAiring>,
+    #[serde(default)]
+    pub show_status: Option<String>,
+    #[serde(default)]
+    pub synonyms: Option<Vec<String>>,
+    #[serde(default)]
+    pub eng_name: Option<String>,
+    #[serde(default)]
+    pub jap_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,6 +244,8 @@ pub struct ExtensionInfo {
     pub supported_types: Vec<String>,
     pub icon_url: Option<String>,
     pub description: Option<String>,
+    pub language: Option<String>,
+    pub has_main_page: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

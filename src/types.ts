@@ -9,6 +9,7 @@ export type TvType =
   | 'LiveStream'
   | 'Torrent'
   | 'NSFW'
+  | 'OVA'
   | 'Other';
 
 export type DubStatus = 'Subbed' | 'Dubbed' | 'Both';
@@ -73,10 +74,28 @@ export interface HomePageList {
   is_horizontal: boolean;
 }
 
+export interface ExpandableShelf {
+  list: HomePageList;
+  current_page: number;
+  has_next: boolean;
+}
+
 export interface Actor {
   name: string;
   role?: string;
   image?: string;
+}
+
+export interface SeasonData {
+  season: number;
+  name?: string;
+  display_season?: number;
+}
+
+export interface NextAiring {
+  episode: number;
+  unix_time: number;
+  season?: number;
 }
 
 export interface Episode {
@@ -88,6 +107,7 @@ export interface Episode {
   rating?: number;
   description?: string;
   release_date?: string;
+  dub_status?: DubStatus;
 }
 
 export interface LoadResponse {
@@ -106,6 +126,15 @@ export interface LoadResponse {
   recommendations: SearchResponse[];
   trailers: string[];
   sync_ids: Record<string, string>;
+  score?: number;
+  content_rating?: string;
+  coming_soon?: boolean;
+  season_names?: SeasonData[];
+  next_airing?: NextAiring;
+  show_status?: 'Ongoing' | 'Completed' | string;
+  synonyms?: string[];
+  eng_name?: string;
+  jap_name?: string;
 }
 
 export type QualityProfile =
@@ -139,9 +168,19 @@ export interface SubtitleData {
   name?: string;
 }
 
+export interface RepositoryEntry {
+  name: string;
+  url: string;
+  icon_url?: string;
+  manifest_version?: number;
+  plugin_count: number;
+  added_at: number;
+}
+
 export interface PluginManifest {
   id: string;
   name: string;
+  internal_name?: string;
   plugin_url: string;
   version: number;
   api_version: number;
@@ -150,7 +189,10 @@ export interface PluginManifest {
   authors: string[];
   description?: string;
   repository_url?: string;
-  status?: 'installed' | 'available' | 'update_available';
+  language?: string;
+  file_size?: number;
+  file_hash?: string;
+  status?: 'installed' | 'available' | 'update_available' | 'down' | string;
 }
 
 export interface RepositoryManifest {
@@ -166,6 +208,7 @@ export interface WatchHistoryItem {
   provider_id: string;
   title: string;
   poster_url?: string;
+  tv_type?: TvType;
   episode_num?: number;
   season_num?: number;
   episode_name?: string;
@@ -201,6 +244,8 @@ export interface ExtensionInfo {
   supported_types: string[];
   icon_url?: string;
   description?: string;
+  language?: string;
+  has_main_page?: boolean;
 }
 
 export interface MpvTrack {
@@ -216,4 +261,44 @@ export interface MpvTrack {
   audio_channels?: number;
   'audio-channels'?: number;
 }
+
+/**
+ * ISO language code to Flag emoji mapping (CloudStream getFlagFromIso parity)
+ */
+export const getFlagFromIso = (lang?: string): string => {
+  if (!lang) return '🌐';
+  const clean = lang.trim().toLowerCase();
+  switch (clean) {
+    case 'en': return '🇺🇸';
+    case 'bn': return '🇧🇩';
+    case 'hi': return '🇮🇳';
+    case 'ja': return '🇯🇵';
+    case 'ko': return '🇰🇷';
+    case 'zh': return '🇨🇳';
+    case 'es': return '🇪🇸';
+    case 'fr': return '🇫🇷';
+    case 'de': return '🇩🇪';
+    case 'it': return '🇮🇹';
+    case 'pt': return '🇧🇷';
+    case 'ru': return '🇷🇺';
+    case 'ar': return '🇸🇦';
+    case 'id': return '🇮🇩';
+    case 'vi': return '🇻🇳';
+    case 'tr': return '🇹🇷';
+    case 'th': return '🇹🇭';
+    case 'all':
+    case 'multi':
+      return '🌐';
+    default: {
+      if (clean.length === 2) {
+        const codePoints = clean
+          .toUpperCase()
+          .split('')
+          .map((c) => 127397 + c.charCodeAt(0));
+        return String.fromCodePoint(...codePoints);
+      }
+      return '🌐';
+    }
+  }
+};
 
