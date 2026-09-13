@@ -906,9 +906,144 @@ async fn add_repository(url: String, name: Option<String>, state: State<'_, AppS
     Ok(entry)
 }
 
+async fn delete_plugins_safely(
+    plugin_names: &[String],
+    state: &AppState,
+) -> Result<usize, String> {
+    if plugin_names.is_empty() {
+        return Ok(0);
+    }
+
+    let mut deleted_count = 0;
+    let mut lock_failed = false;
+
+    // First attempt: try normal file deletion
+    for name in plugin_names {
+        match state.plugin_manager.delete_plugin(name) {
+            Ok(true) => deleted_count += 1,
+            Ok(false) => {}
+            Err(e) => {
+                println!("[Plugins] File delete for '{}' locked/failed ({}). Will release lock via engine restart.", name, e);
+                lock_failed = true;
+            }
+        }
+    }
+
+    // If any file was locked by Java engine process on Windows:
+    if lock_failed {
+        state.engine.kill();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Retry deletion now that locks are dropped
+        for name in plugin_names {
+            if let Ok(true) = state.plugin_manager.delete_plugin(name) {
+                deleted_count += 1;
+            }
+        }
+
+        // Restart the engine
+        state.engine.spawn_and_wait().await;
+    } else {
+        // Engine is still running, just reload it
+        let _ = state.engine.reload().await;
+    }
+
+    Ok(deleted_count)
+}
+
+async fn uninstall_all_plugins_safely(state: &AppState) -> Result<usize, String> {
+    state.engine.kill();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let count = state.plugin_manager.delete_all_plugins().map_err(|e| e.to_string())?;
+
+    // Restart engine (will be completely empty with 0 providers)
+    state.engine.spawn_and_wait().await;
+
+    Ok(count)
+}
+
 #[tauri::command]
-async fn delete_repository(url: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.delete_repository(&url).map_err(|e| e.to_string())
+async fn delete_repository(
+    url: String,
+    delete_plugins: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let should_delete_plugins = delete_plugins.unwrap_or(true);
+
+    if should_delete_plugins {
+        if let Ok(Some(manifest_json)) = state.db.get_repository_manifest_json(&url) {
+            if let Ok(manifest) = serde_json::from_str::<RepositoryManifest>(&manifest_json) {
+                let mut names = Vec::new();
+                for p in manifest.plugins {
+                    names.push(p.name.clone());
+                    if let Some(internal) = p.internal_name {
+                        if !internal.eq_ignore_ascii_case(&p.name) {
+                            names.push(internal);
+                        }
+                    }
+                }
+                let _ = delete_plugins_safely(&names, &state).await;
+            }
+        }
+    }
+
+    state.db.delete_repository(&url).map_err(|e| e.to_string())?;
+
+    // If no repositories remain in DB and delete_plugins is true, clean up any leftover repo plugins
+    if let Ok(remaining) = state.db.get_repositories() {
+        if remaining.is_empty() && should_delete_plugins {
+            let _ = uninstall_all_plugins_safely(&state).await;
+        }
+    }
+
+    let _ = state.engine.reload().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_all_repositories(
+    delete_plugins: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let should_delete_plugins = delete_plugins.unwrap_or(true);
+
+    if should_delete_plugins {
+        let _ = uninstall_all_plugins_safely(&state).await;
+    }
+
+    state.db.delete_all_repositories().map_err(|e| e.to_string())?;
+    let _ = state.engine.reload().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn uninstall_all_plugins(state: State<'_, AppState>) -> Result<usize, String> {
+    uninstall_all_plugins_safely(&state).await
+}
+
+#[tauri::command]
+async fn cleanup_orphaned_plugins(state: State<'_, AppState>) -> Result<usize, String> {
+    let repo_plugins = state.db.get_all_repository_plugins().unwrap_or_default();
+    let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+
+    if repo_plugins.is_empty() {
+        return uninstall_all_plugins_safely(&state).await;
+    }
+
+    let mut orphaned_names = Vec::new();
+    for inst in installed {
+        let belongs_to_repo = repo_plugins.iter().any(|rp| {
+            rp.name.eq_ignore_ascii_case(&inst.name)
+                || rp.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&inst.name)
+                || inst.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&rp.name)
+        });
+        if !belongs_to_repo {
+            orphaned_names.push(inst.name);
+        }
+    }
+
+    delete_plugins_safely(&orphaned_names, &state).await
 }
 
 #[tauri::command]
@@ -993,9 +1128,7 @@ async fn list_installed_plugins(state: State<'_, AppState>) -> Result<Vec<Plugin
 
 #[tauri::command]
 async fn delete_plugin(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.plugin_manager.delete_plugin(&name).map_err(|e| e.to_string())?;
-    let _ = state.engine.reload().await;
-    Ok(())
+    delete_plugins_safely(&[name], &state).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -1226,6 +1359,7 @@ pub fn run() {
             get_repositories,
             add_repository,
             delete_repository,
+            delete_all_repositories,
             sync_repositories,
             fetch_repository,
             install_plugin,
@@ -1233,6 +1367,8 @@ pub fn run() {
             install_all_plugins,
             list_installed_plugins,
             delete_plugin,
+            uninstall_all_plugins,
+            cleanup_orphaned_plugins,
             get_anime_skip,
             search_subtitles,
             get_proxy_port,

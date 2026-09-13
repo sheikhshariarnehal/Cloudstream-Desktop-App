@@ -215,6 +215,9 @@ export const App: React.FC = () => {
         loadHome(defaultExt);
       } else if (realExts.length === 0) {
         setSelectedExtension('');
+        try {
+          localStorage.removeItem('cloudstream_selected_extension');
+        } catch {}
       }
     } catch (e) {
       console.error('Failed to load extensions:', e);

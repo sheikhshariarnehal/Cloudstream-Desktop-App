@@ -48,7 +48,7 @@ export function useHomeViewModel(selectedExtension: string) {
 
       const target = extName !== undefined ? extName : selectedExtension;
 
-      if (target === 'none' || target === 'None' || target === 'None (Offline Mode)') {
+      if (!target || target === 'none' || target === 'None' || target === 'None (Offline Mode)') {
         setShelves([]);
         setLoadingShelves(false);
         return;

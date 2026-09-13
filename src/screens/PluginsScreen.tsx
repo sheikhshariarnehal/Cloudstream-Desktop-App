@@ -31,6 +31,7 @@ import {
   Share2,
   Compass,
   MessageSquare,
+  AlertCircle,
 } from 'lucide-react';
 
 const TV_TYPES_LIST = [
@@ -295,16 +296,17 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
   // Delete Repository with confirmation
   const handleDeleteRepo = async (repo: RepositoryEntry, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm(`Are you sure you want to delete repository "${repo.name}"?`)) {
+    if (!window.confirm(`Are you sure you want to delete repository "${repo.name}"? All extensions from this repository will also be uninstalled.`)) {
       return;
     }
     try {
-      await invoke('delete_repository', { url: repo.url });
+      await invoke('delete_repository', { url: repo.url, deletePlugins: true });
       if (selectedRepo?.url === repo.url) {
         setSelectedRepo(null);
       }
       await loadRepositories();
-      setMessage(`Removed repository "${repo.name}"`);
+      await loadInstalled();
+      setMessage(`Removed repository "${repo.name}" and uninstalled its extensions.`);
       onExtensionsChanged?.();
     } catch (e) {
       console.error('Failed to delete repository:', e);
@@ -315,14 +317,13 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
   // Delete all repositories
   const handleDeleteAllRepos = async () => {
     if (repositories.length === 0) return;
-    if (!window.confirm(`Are you sure you want to remove all ${repositories.length} repositories?`)) return;
+    if (!window.confirm(`Are you sure you want to remove all ${repositories.length} repositories and uninstall all their extensions?`)) return;
     try {
-      for (const r of repositories) {
-        await invoke('delete_repository', { url: r.url });
-      }
+      await invoke('delete_all_repositories', { deletePlugins: true });
       setSelectedRepo(null);
       await loadRepositories();
-      setMessage('All repositories removed.');
+      await loadInstalled();
+      setMessage('All repositories and extensions removed.');
       onExtensionsChanged?.();
     } catch (e) {
       console.error('Failed to remove all repositories:', e);
@@ -335,9 +336,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
     if (installedPlugins.length === 0) return;
     if (!window.confirm(`Are you sure you want to uninstall all ${installedPlugins.length} installed extensions?`)) return;
     try {
-      for (const p of installedPlugins) {
-        await invoke('delete_plugin', { name: p.name });
-      }
+      await invoke('uninstall_all_plugins');
       await loadInstalled();
       onExtensionsChanged?.();
       setMessage('All extensions uninstalled successfully.');
@@ -2171,6 +2170,11 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 </h1>
                 <p style={{ color: '#7d789e', fontSize: '13.5px', marginTop: '4px', margin: 0 }}>
                   {installedPlugins.length} active provider plugins (.cs3) ready for streaming.
+                  {repositories.length === 0 && installedPlugins.length > 0 && (
+                    <span style={{ color: '#fb7185', marginLeft: '8px', fontWeight: 600 }}>
+                      (No active repositories — leftover extensions from deleted repositories)
+                    </span>
+                  )}
                 </p>
               </div>
 
@@ -2354,6 +2358,83 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 </button>
               </div>
             </div>
+
+            {/* Leftover / Orphaned extensions alert if 0 repositories */}
+            {repositories.length === 0 && installedPlugins.length > 0 && (
+              <div
+                style={{
+                  padding: '16px 20px',
+                  marginBottom: '20px',
+                  borderRadius: '14px',
+                  background: 'rgba(244, 63, 94, 0.08)',
+                  border: '1px solid rgba(244, 63, 94, 0.25)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '16px',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div
+                    style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: 'rgba(244, 63, 94, 0.15)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <AlertCircle size={20} color="#fb7185" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>
+                      {installedPlugins.length} Leftover Extension{installedPlugins.length > 1 ? 's' : ''} Detected
+                    </div>
+                    <div style={{ fontSize: '12.5px', color: '#a19cb8', marginTop: '2px' }}>
+                      All repositories were removed, but {installedPlugins.length} extension plugin{installedPlugins.length > 1 ? 's are' : ' is'} still installed.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm(`Uninstall all ${installedPlugins.length} leftover extensions?`)) return;
+                    try {
+                      await invoke('uninstall_all_plugins');
+                      await loadInstalled();
+                      onExtensionsChanged?.();
+                      setMessage('All leftover extensions successfully uninstalled.');
+                    } catch (err) {
+                      console.error(err);
+                      alert(`Failed to uninstall leftover extensions: ${err}`);
+                    }
+                  }}
+                  style={{
+                    padding: '8px 18px',
+                    borderRadius: '9999px',
+                    border: 'none',
+                    background: '#f43f5e',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: '12.5px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#e11d48'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#f43f5e'; }}
+                >
+                  <Trash2 size={14} />
+                  <span>Clean Up All Extensions</span>
+                </button>
+              </div>
+            )}
 
             {/* Repositories Cards Grid */}
             {repositories.length === 0 ? (

@@ -363,6 +363,12 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_all_repositories(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM repositories", [])?;
+        Ok(())
+    }
+
     pub fn get_repository_manifest_json(&self, url: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT manifest_json FROM repositories WHERE url = ?1")?;

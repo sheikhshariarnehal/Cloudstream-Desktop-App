@@ -138,8 +138,13 @@ impl EngineClient {
         }
     }
 
+    pub fn kill(&self) {
+        #[cfg(target_os = "windows")]
+        Self::kill_engine_on_port(self.port);
+    }
+
     /// Spawn the engine, wait up to 25 s for it to become healthy.
-    async fn spawn_and_wait(&self) -> bool {
+    pub async fn spawn_and_wait(&self) -> bool {
         let Some(jar_path) = Self::find_engine_jar() else {
             println!("[EngineClient] Could not locate engine JAR — .cs3 extensions unavailable");
             return false;

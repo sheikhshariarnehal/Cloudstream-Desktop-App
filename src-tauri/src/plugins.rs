@@ -367,10 +367,16 @@ impl PluginManager {
         Ok(list)
     }
 
-    pub fn delete_plugin(&self, plugin_name: &str) -> Result<()> {
+    pub fn delete_plugin(&self, plugin_name: &str) -> Result<bool> {
         let safe_name = plugin_name.replace(' ', "_").to_lowercase();
         let query_lower = plugin_name.to_lowercase();
+        let clean_query = plugin_name
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+            .to_lowercase();
 
+        let mut deleted_any = false;
         if self.plugins_dir.exists() {
             for entry in fs::read_dir(&self.plugins_dir)? {
                 let entry = entry?;
@@ -380,11 +386,47 @@ impl PluginManager {
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                if stem == safe_name || stem == query_lower {
-                    let _ = fs::remove_file(&path);
+                let clean_stem = stem
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>()
+                    .to_lowercase();
+
+                let file_name = entry.file_name().to_string_lossy().to_string();
+
+                let is_match = stem == safe_name
+                    || stem == query_lower
+                    || (!clean_query.is_empty() && clean_stem == clean_query)
+                    || file_name.eq_ignore_ascii_case(plugin_name);
+
+                if is_match {
+                    println!("[PluginManager] Deleting plugin file {:?}", path);
+                    fs::remove_file(&path)?;
+                    deleted_any = true;
                 }
             }
         }
-        Ok(())
+        Ok(deleted_any)
+    }
+
+    pub fn delete_all_plugins(&self) -> Result<usize> {
+        let mut count = 0;
+        if self.plugins_dir.exists() {
+            for entry in fs::read_dir(&self.plugins_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext == "cs3" || ext == "jar" {
+                    println!("[PluginManager] Removing plugin file {:?}", path);
+                    fs::remove_file(&path)?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
     }
 }
