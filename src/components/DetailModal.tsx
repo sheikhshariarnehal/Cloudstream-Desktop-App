@@ -27,7 +27,13 @@ import {
 interface DetailModalProps {
   item: SearchResponse;
   onClose: () => void;
-  onPlay: (item: SearchResponse, episode: Episode, links: ExtractorLink[]) => void;
+  onPlay: (
+    item: SearchResponse,
+    episode: Episode,
+    links: ExtractorLink[],
+    allEpisodes?: Episode[],
+    mediaDetails?: LoadResponse
+  ) => void;
   onSelectItem?: (item: SearchResponse) => void;
 }
 
@@ -208,7 +214,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         data: ep.data,
       });
       if (links && links.length > 0) {
-        onPlay(item, ep, links);
+        onPlay(item, ep, links, details?.episodes, details || undefined);
       } else {
         alert('No playable links found for this source.');
       }

@@ -270,6 +270,23 @@ impl PluginManager {
                                                 .to_string();
                                             let version = val.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
                                             let id = format!("{}_{}", name.to_lowercase().replace(' ', "_"), version);
+                                            let icon_url = val
+                                                .get("iconUrl")
+                                                .or_else(|| val.get("icon_url"))
+                                                .or_else(|| val.get("icon"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string());
+
+                                            let tv_types = val
+                                                .get("tvTypes")
+                                                .and_then(|v| v.as_array())
+                                                .map(|arr| {
+                                                    arr.iter()
+                                                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                                        .collect()
+                                                })
+                                                .unwrap_or_default();
+
                                             list.push(PluginManifest {
                                                 id,
                                                 name: name.clone(),
@@ -277,8 +294,8 @@ impl PluginManager {
                                                 plugin_url: path.to_string_lossy().to_string(),
                                                 version,
                                                 api_version: val.get("apiVersion").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
-                                                tv_types: Vec::new(),
-                                                icon_url: None,
+                                                tv_types,
+                                                icon_url,
                                                 authors: Vec::new(),
                                                 description: val.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 repository_url: None,
@@ -289,6 +306,34 @@ impl PluginManager {
                                             });
                                             found_manifest = true;
                                             break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // If icon_url wasn't in json manifest, check if archive contains icon image
+                        if found_manifest {
+                            if let Some(last_plugin) = list.last_mut() {
+                                if last_plugin.icon_url.is_none() {
+                                    for j in 0..archive.len() {
+                                        if let Ok(mut img_file) = archive.by_index(j) {
+                                            let entry_name = img_file.name().to_lowercase();
+                                            if entry_name == "icon.png" || entry_name.ends_with("/icon.png") {
+                                                let mut img_bytes = Vec::new();
+                                                if img_file.read_to_end(&mut img_bytes).is_ok() {
+                                                    use base64::Engine;
+                                                    last_plugin.icon_url = Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&img_bytes)));
+                                                    break;
+                                                }
+                                            } else if entry_name == "icon.jpg" || entry_name.ends_with("/icon.jpg") || entry_name == "icon.jpeg" || entry_name.ends_with("/icon.jpeg") {
+                                                let mut img_bytes = Vec::new();
+                                                if img_file.read_to_end(&mut img_bytes).is_ok() {
+                                                    use base64::Engine;
+                                                    last_plugin.icon_url = Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&img_bytes)));
+                                                    break;
+                                                }
+                                            }
                                         }
                                     }
                                 }

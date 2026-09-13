@@ -1,4 +1,4 @@
-use crate::models::{RepositoryEntry, SearchHistoryItem, WatchHistoryItem, WatchlistItem};
+use crate::models::{PluginManifest, RepositoryEntry, RepositoryManifest, SearchHistoryItem, WatchHistoryItem, WatchlistItem};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
@@ -372,6 +372,30 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_all_repository_manifest_jsons(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT manifest_json FROM repositories")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut list = Vec::new();
+        for r in rows {
+            if let Ok(s) = r {
+                list.push(s);
+            }
+        }
+        Ok(list)
+    }
+
+    pub fn get_all_repository_plugins(&self) -> Result<Vec<PluginManifest>> {
+        let jsons = self.get_all_repository_manifest_jsons()?;
+        let mut all_plugins = Vec::new();
+        for json_str in jsons {
+            if let Ok(manifest) = serde_json::from_str::<RepositoryManifest>(&json_str) {
+                all_plugins.extend(manifest.plugins);
+            }
+        }
+        Ok(all_plugins)
     }
 
     pub fn add_search_history(&self, item: &SearchHistoryItem) -> Result<()> {

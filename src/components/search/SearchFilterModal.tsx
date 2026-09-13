@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, SlidersHorizontal } from 'lucide-react';
+import { X, Check, SlidersHorizontal, Puzzle } from 'lucide-react';
 import { ExtensionInfo, TvType } from '../../types';
 
 interface SearchFilterModalProps {
@@ -8,21 +8,6 @@ interface SearchFilterModalProps {
   extensions: ExtensionInfo[];
   selectedProviders: string[];
   onApply: (providers: string[]) => void;
-}
-
-function getFlagFromLang(lang?: string): string {
-  if (!lang) return '🌐';
-  const l = lang.toLowerCase();
-  if (l.includes('en') || l.includes('us')) return '🇺🇸';
-  if (l.includes('bn') || l.includes('bd')) return '🇧🇩';
-  if (l.includes('ja') || l.includes('jp')) return '🇯🇵';
-  if (l.includes('hi') || l.includes('in')) return '🇮🇳';
-  if (l.includes('ko') || l.includes('kr')) return '🇰🇷';
-  if (l.includes('es')) return '🇪🇸';
-  if (l.includes('fr')) return '🇫🇷';
-  if (l.includes('de')) return '🇩🇪';
-  if (l.includes('zh') || l.includes('cn')) return '🇨🇳';
-  return '🌐';
 }
 
 export const SearchFilterModal: React.FC<SearchFilterModalProps> = ({
@@ -152,9 +137,42 @@ export const SearchFilterModal: React.FC<SearchFilterModalProps> = ({
                       {isChecked && <Check size={13} strokeWidth={3} />}
                     </div>
 
-                    <span className="filter-ext-flag" title="Language">
-                      {getFlagFromLang(ext.description || ext.name)}
-                    </span>
+                    {ext.icon_url ? (
+                      <img
+                        src={ext.icon_url}
+                        alt={ext.name}
+                        style={{
+                          width: '22px',
+                          height: '22px',
+                          borderRadius: '5px',
+                          objectFit: 'contain',
+                          background: 'rgba(255,255,255,0.04)',
+                          flexShrink: 0,
+                          border: 'none',
+                        }}
+                        onError={(ev) => {
+                          ev.currentTarget.style.display = 'none';
+                          const sibling = ev.currentTarget.nextElementSibling as HTMLElement | null;
+                          if (sibling) sibling.style.display = 'inline-flex';
+                        }}
+                      />
+                    ) : null}
+                    {/* Fallback icon shown only when image is absent or fails */}
+                    <div
+                      className="filter-ext-fallback-icon"
+                      style={{
+                        display: ext.icon_url ? 'none' : 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '22px',
+                        height: '22px',
+                        borderRadius: '5px',
+                        background: 'rgba(124, 58, 237, 0.15)',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Puzzle size={12} color="var(--stremio-purple-light)" />
+                    </div>
 
                     <div className="filter-ext-info">
                       <div className="filter-ext-name">{ext.name}</div>

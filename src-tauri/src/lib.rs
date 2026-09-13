@@ -75,6 +75,72 @@ fn is_manifest_provider_match(m: &PluginManifest, p_name: &str) -> bool {
         || (!stem_m.is_empty() && (stem_p.starts_with(&stem_m) || stem_m.starts_with(&stem_p)))
 }
 
+fn resolve_plugin_icon(
+    name: &str,
+    alt_name: Option<&str>,
+    repo_plugins: &[PluginManifest],
+) -> Option<String> {
+    // 1. Exact match by name or internal name
+    for rp in repo_plugins {
+        if rp.icon_url.is_none() {
+            continue;
+        }
+        if rp.name.eq_ignore_ascii_case(name)
+            || alt_name.map_or(false, |a| rp.name.eq_ignore_ascii_case(a))
+            || rp.internal_name.as_deref().map_or(false, |i| i.eq_ignore_ascii_case(name))
+            || alt_name.map_or(false, |a| rp.internal_name.as_deref().map_or(false, |i| i.eq_ignore_ascii_case(a)))
+        {
+            return rp.icon_url.clone();
+        }
+    }
+
+    // 2. Provider match helper (stems, prefixes)
+    for rp in repo_plugins {
+        if rp.icon_url.is_none() {
+            continue;
+        }
+        if is_manifest_provider_match(rp, name) || alt_name.map_or(false, |a| is_manifest_provider_match(rp, a)) {
+            return rp.icon_url.clone();
+        }
+    }
+
+    // 3. Stem matching
+    let name_stem = normalize_provider_stem(name);
+    let alt_stem = alt_name.map(normalize_provider_stem).unwrap_or_default();
+    for rp in repo_plugins {
+        if rp.icon_url.is_none() {
+            continue;
+        }
+        let rp_stem = normalize_provider_stem(&rp.name);
+        if !rp_stem.is_empty() {
+            if (!name_stem.is_empty() && (rp_stem == name_stem || name_stem.starts_with(&rp_stem) || rp_stem.starts_with(&name_stem)))
+                || (!alt_stem.is_empty() && (rp_stem == alt_stem || alt_stem.starts_with(&rp_stem) || rp_stem.starts_with(&alt_stem)))
+            {
+                return rp.icon_url.clone();
+            }
+        }
+    }
+
+    // 4. Alphanumeric containment
+    let clean_name = clean_alphanumeric(name);
+    let clean_alt = alt_name.map(clean_alphanumeric).unwrap_or_default();
+    for rp in repo_plugins {
+        if rp.icon_url.is_none() {
+            continue;
+        }
+        let clean_rp = clean_alphanumeric(&rp.name);
+        if !clean_rp.is_empty() {
+            if (!clean_name.is_empty() && (clean_name.contains(&clean_rp) || clean_rp.contains(&clean_name)))
+                || (!clean_alt.is_empty() && (clean_alt.contains(&clean_rp) || clean_rp.contains(&clean_alt)))
+            {
+                return rp.icon_url.clone();
+            }
+        }
+    }
+
+    None
+}
+
 async fn resolve_provider_name(state: &State<'_, AppState>, provider: Option<String>) -> Option<String> {
     if let Some(req) = provider {
         if req == "all" || req == "All" || req == "random" || req == "none" || req.is_empty() {
@@ -130,18 +196,7 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
         return Ok(list);
     }
 
-    // Unified "All Extensions" option (only when at least one extension is installed)
-    list.push(ExtensionInfo {
-        id: "all".to_string(),
-        name: "All Extensions".to_string(),
-        is_builtin: true,
-        version: Some("Combined".to_string()),
-        supported_types: vec!["Movie".to_string(), "TvSeries".to_string(), "Anime".to_string()],
-        icon_url: None,
-        description: Some("Unified feeds across all installed extensions".to_string()),
-        language: Some("all".to_string()),
-        has_main_page: Some(true),
-    });
+    let repo_plugins = state.db.get_all_repository_plugins().unwrap_or_default();
 
     let engine_providers = state.engine.get_providers().await.unwrap_or_default();
     let mut matched_manifest_ids = std::collections::HashSet::new();
@@ -163,6 +218,10 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
                 is_manifest_provider_match(m, &p.name)
             });
 
+            let icon_url = manifest
+                .and_then(|m| m.icon_url.clone())
+                .or_else(|| resolve_plugin_icon(&p.name, manifest.map(|m| m.name.as_str()), &repo_plugins));
+
             if let Some(m) = manifest {
                 matched_manifest_ids.insert(m.id.clone());
                 list.push(ExtensionInfo {
@@ -179,7 +238,7 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
                     } else {
                         p.supported_types.clone()
                     },
-                    icon_url: m.icon_url.clone(),
+                    icon_url,
                     description: m.description.clone()
                         .or_else(|| Some(format!("Dynamic .cs3 extension ({})", p.lang))),
                     language: Some(p.lang.clone()),
@@ -192,6 +251,8 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
     // Include any installed plugins that haven't registered with engine yet
     for inst in installed_manifests {
         if !matched_manifest_ids.contains(&inst.id) {
+            let icon_url = inst.icon_url
+                .or_else(|| resolve_plugin_icon(&inst.name, inst.internal_name.as_deref(), &repo_plugins));
             list.push(ExtensionInfo {
                 id: inst.id,
                 name: inst.name,
@@ -202,7 +263,7 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
                 } else {
                     inst.tv_types
                 },
-                icon_url: inst.icon_url,
+                icon_url,
                 description: inst.description,
                 language: inst.language,
                 has_main_page: Some(true),
@@ -920,7 +981,14 @@ async fn install_all_plugins(plugins: Vec<PluginManifest>, state: State<'_, AppS
 
 #[tauri::command]
 async fn list_installed_plugins(state: State<'_, AppState>) -> Result<Vec<PluginManifest>, String> {
-    state.plugin_manager.list_installed_plugins().map_err(|e| e.to_string())
+    let mut list = state.plugin_manager.list_installed_plugins().map_err(|e| e.to_string())?;
+    let repo_plugins = state.db.get_all_repository_plugins().unwrap_or_default();
+    for item in &mut list {
+        if item.icon_url.is_none() {
+            item.icon_url = resolve_plugin_icon(&item.name, item.internal_name.as_deref(), &repo_plugins);
+        }
+    }
+    Ok(list)
 }
 
 #[tauri::command]

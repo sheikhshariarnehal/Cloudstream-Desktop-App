@@ -1,7 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Episode, ExtractorLink, MpvTrack, SearchResponse, SkipInterval, SubtitleData } from '../types';
+import {
+  Episode,
+  ExtractorLink,
+  LoadResponse,
+  MpvTrack,
+  SearchResponse,
+  SkipInterval,
+  SubtitleData,
+} from '../types';
 import {
   ChevronLeft,
   Check,
@@ -21,13 +29,22 @@ import {
   Volume2,
   VolumeX,
   X,
+  SkipBack,
+  SkipForward,
+  ListVideo,
+  Search,
+  Crop,
+  Clock,
+  Zap,
+  Globe,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   LANGUAGES,
   formatTrackLabel,
   getAutoSelectAudio,
   getAutoSelectSubtitle,
-  getLanguageDisplay,
 } from '../utils/subtitleHelper';
 
 interface PlayerDiagnostics {
@@ -51,19 +68,42 @@ interface PlayerErrorPayload {
   diagnostics: PlayerDiagnostics;
 }
 
-interface PlayerOverlayProps {
+export interface PlayerOverlayProps {
   item: SearchResponse;
   episode: Episode;
   links: ExtractorLink[];
+  allEpisodes?: Episode[];
+  mediaDetails?: LoadResponse;
   onClose: () => void;
+  onSelectEpisode?: (ep: Episode) => Promise<void> | void;
 }
 
-export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, links, onClose }) => {
+export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
+  item,
+  episode,
+  links,
+  allEpisodes,
+  mediaDetails,
+  onClose,
+  onSelectEpisode,
+}) => {
   const hudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const metadataTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isHoldingSpeedRef = useRef<boolean>(false);
   const loadedUrlRef = useRef<string | null>(null);
 
+  // ── Dynamic Episode & Stream Links State ──────────────────────────────────
+  const [currentEpisode, setCurrentEpisode] = useState<Episode>(episode);
+  const [currentLinks, setCurrentLinks] = useState<ExtractorLink[]>(links);
   const [currentLinkIndex, setCurrentLinkIndex] = useState(0);
+  const [isExtractingEpisode, setIsExtractingEpisode] = useState(false);
+
+  // Fallback links history to prevent infinite failover loop
+  const attemptedLinkIndicesRef = useRef<Set<number>>(new Set());
+
+  // ── Playback State ────────────────────────────────────────────────────────
   const [isPlaying, setIsPlaying] = useState(true);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [isBuffering, setIsBuffering] = useState(true);
@@ -75,22 +115,32 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showHud, setShowHud] = useState(true);
 
-  // Popover menus
+  // ── Modals, Overlays & Popovers ───────────────────────────────────────────
   const [showServerPicker, setShowServerPicker] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [showEpisodeDrawer, setShowEpisodeDrawer] = useState(false);
+  const [showDelayModal, setShowDelayModal] = useState(false);
+  const [showOnlineSubModal, setShowOnlineSubModal] = useState(false);
+  const [showPausedMetadata, setShowPausedMetadata] = useState(false);
+
+  // Next episode countdown overlay
+  const [nextCountdown, setNextCountdown] = useState<number | null>(null);
 
   // Diagnostics & errors
   const [diagnosticsData, setDiagnosticsData] = useState<PlayerDiagnostics | null>(null);
   const [playbackError, setPlaybackError] = useState<PlayerErrorPayload | null>(null);
+  const [failoverNotice, setFailoverNotice] = useState<string | null>(null);
 
   // Tracks, speed, aspect ratio, buffering & sync
   const [tracks, setTracks] = useState<MpvTrack[]>([]);
   const [activeAid, setActiveAid] = useState<number>(0);
   const [activeSid, setActiveSid] = useState<number>(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [normalSpeedBeforeHold, setNormalSpeedBeforeHold] = useState<number>(1.0);
+  const [isSpeedBoosted, setIsSpeedBoosted] = useState<boolean>(false);
   const [panscanVal, setPanscanVal] = useState<number>(0.0);
   const [bufferedTime, setBufferedTime] = useState<number>(0);
   const [subDelay, setSubDelay] = useState<number>(0.0);
@@ -104,33 +154,41 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     const saved = localStorage.getItem('player_auto_audio');
     return saved !== null ? saved === 'true' : true;
   });
-  const [preferredSubLang, setPreferredSubLang] = useState<string>(() => {
+  const [preferredSubLang] = useState<string>(() => {
     return localStorage.getItem('player_preferred_sub_lang') || 'en';
   });
-  const [preferredAudioLang, setPreferredAudioLang] = useState<string>(() => {
-    return localStorage.getItem('player_preferred_audio_lang') || 'auto';
+  const [autoSkipIntroOutro, setAutoSkipIntroOutro] = useState<boolean>(() => {
+    const saved = localStorage.getItem('player_auto_skip_intro');
+    return saved !== null ? saved === 'true' : false;
   });
 
   // Online external subtitles
+  const [onlineSubQuery, setOnlineSubQuery] = useState('');
+  const [onlineSubLang, setOnlineSubLang] = useState(preferredSubLang || 'en');
+  const [onlineSubResults, setOnlineSubResults] = useState<SubtitleData[]>([]);
+  const [isSearchingOnlineSubs, setIsSearchingOnlineSubs] = useState(false);
   const [externalSubs, setExternalSubs] = useState<SubtitleData[]>([]);
-  const [isLoadingSubs, setIsLoadingSubs] = useState<boolean>(false);
 
   // AniSkip & watch progress
   const [skipIntervals, setSkipIntervals] = useState<SkipInterval[]>([]);
   const [currentSkip, setCurrentSkip] = useState<SkipInterval | null>(null);
 
+  // Drawer filtering
+  const [drawerSeason, setDrawerSeason] = useState<number>(episode.season || 1);
+  const [drawerSearch, setDrawerSearch] = useState('');
+
   // Timeline hover tooltip & Center ripple feedback
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPercent, setHoverPercent] = useState<number>(0);
   const [centerFeedback, setCenterFeedback] = useState<{
-    type: 'play' | 'pause' | 'forward' | 'rewind' | 'speed' | 'volume';
+    type: 'play' | 'pause' | 'forward' | 'rewind' | 'speed' | 'volume' | 'aspect';
     label?: string;
     id: number;
   } | null>(null);
 
-  const activeLink = links[currentLinkIndex] || links[0];
+  const activeLink = currentLinks[currentLinkIndex] || currentLinks[0];
 
-  // Loading backdrop lifecycle: stays 100% solid until video frames actually render, then dissolves smoothly
+  // Loading backdrop lifecycle
   const [backdropMounted, setBackdropMounted] = useState(true);
   const [backdropFading, setBackdropFading] = useState(false);
 
@@ -147,39 +205,118 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     }
   }, [isVideoReady]);
 
+  // ── Episodes Calculations (CloudStream Parity) ───────────────────────────
+  const episodesList = useMemo(() => {
+    if (allEpisodes && allEpisodes.length > 0) return allEpisodes;
+    if (mediaDetails?.episodes && mediaDetails.episodes.length > 0) return mediaDetails.episodes;
+    return [episode];
+  }, [allEpisodes, mediaDetails, episode]);
+
+  const hasMultipleEpisodes = episodesList.length > 1;
+
+  const currentEpIndex = useMemo(() => {
+    return episodesList.findIndex(
+      (e) =>
+        (e.season || 1) === (currentEpisode.season || 1) &&
+        e.episode === currentEpisode.episode
+    );
+  }, [episodesList, currentEpisode]);
+
+  const hasPrevEp = currentEpIndex > 0;
+  const hasNextEp = currentEpIndex !== -1 && currentEpIndex < episodesList.length - 1;
+  const prevEp = hasPrevEp ? episodesList[currentEpIndex - 1] : null;
+  const nextEp = hasNextEp ? episodesList[currentEpIndex + 1] : null;
+
+  const drawerSeasons = useMemo(() => {
+    const sNums = Array.from(new Set(episodesList.map((e) => e.season || 1))).sort((a, b) => a - b);
+    return sNums.length > 0 ? sNums : [1];
+  }, [episodesList]);
+
+  const drawerEpisodes = useMemo(() => {
+    let list = episodesList.filter((e) => (e.season || 1) === drawerSeason);
+    if (drawerSearch.trim()) {
+      const q = drawerSearch.trim().toLowerCase();
+      list = list.filter(
+        (e) =>
+          e.episode.toString() === q ||
+          `ep ${e.episode}`.includes(q) ||
+          `episode ${e.episode}`.includes(q) ||
+          (e.name && e.name.toLowerCase().includes(q))
+      );
+    }
+    return list.sort((a, b) => a.episode - b.episode);
+  }, [episodesList, drawerSeason, drawerSearch]);
+
   // ── HUD auto-hide ─────────────────────────────────────────────────────────
   const resetHudTimer = () => {
     setShowHud(true);
+    setShowPausedMetadata(false);
     if (hudTimerRef.current) clearTimeout(hudTimerRef.current);
-    hudTimerRef.current = setTimeout(() => setShowHud(false), 3200);
+    hudTimerRef.current = setTimeout(() => {
+      setShowHud(false);
+      // If paused, schedule metadata scrim after controls hide (CloudStream scheduleMetadataVisibility)
+      if (!isPlaying && isVideoReady) {
+        setShowPausedMetadata(true);
+      }
+    }, 3200);
   };
 
   useEffect(() => {
     resetHudTimer();
     return () => {
       if (hudTimerRef.current) clearTimeout(hudTimerRef.current);
+      if (metadataTimerRef.current) clearTimeout(metadataTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isPlaying]);
 
-  // Keep HUD alive while popups or menus are open
+  // Keep HUD alive while popups, server picker or settings are open (drawer has its own dedicated UI)
   useEffect(() => {
-    if (showServerPicker || showDiagnostics || showSubMenu || showAudioMenu || showSettingsMenu || playbackError) {
+    const isAnyModalOpen =
+      showServerPicker ||
+      showDiagnostics ||
+      showSubMenu ||
+      showAudioMenu ||
+      showSettingsMenu ||
+      showDelayModal ||
+      showOnlineSubModal ||
+      nextCountdown !== null ||
+      playbackError !== null;
+
+    if (isAnyModalOpen) {
       if (hudTimerRef.current) clearTimeout(hudTimerRef.current);
       setShowHud(true);
+      setShowPausedMetadata(false);
     }
-  }, [showServerPicker, showDiagnostics, showSubMenu, showAudioMenu, showSettingsMenu, playbackError]);
+  }, [
+    showServerPicker,
+    showDiagnostics,
+    showSubMenu,
+    showAudioMenu,
+    showSettingsMenu,
+    showDelayModal,
+    showOnlineSubModal,
+    nextCountdown,
+    playbackError,
+  ]);
+
+  // Cleanly dismiss paused metadata scrim when episode drawer opens
+  useEffect(() => {
+    if (showEpisodeDrawer) {
+      setShowPausedMetadata(false);
+    }
+  }, [showEpisodeDrawer]);
 
   // ── Center ripple feedback trigger ────────────────────────────────────────
   const triggerFeedback = (
-    type: 'play' | 'pause' | 'forward' | 'rewind' | 'speed' | 'volume',
+    type: 'play' | 'pause' | 'forward' | 'rewind' | 'speed' | 'volume' | 'aspect',
     label?: string
   ) => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     setCenterFeedback({ type, label, id: Date.now() });
     feedbackTimerRef.current = setTimeout(() => {
       setCenterFeedback(null);
-    }, 600);
+    }, 650);
   };
 
   // ── Normalize track list from MPV ──────────────────────────────────────────
@@ -198,7 +335,83 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     }));
   };
 
-  // ── Native MPV Playback Loading ───────────────────────────────────────────
+  // ── Episode Switching Function ────────────────────────────────────────────
+  const handleSwitchEpisode = async (targetEp: Episode) => {
+    if (
+      targetEp.episode === currentEpisode.episode &&
+      (targetEp.season || 1) === (currentEpisode.season || 1)
+    ) {
+      setShowEpisodeDrawer(false);
+      return;
+    }
+
+    setIsExtractingEpisode(true);
+    setNextCountdown(null);
+    setShowEpisodeDrawer(false);
+    try {
+      if (onSelectEpisode) {
+        await onSelectEpisode(targetEp);
+      } else {
+        const newLinks: ExtractorLink[] = await invoke('load_links', {
+          provider: item.api_name,
+          data: targetEp.data,
+        });
+        if (newLinks && newLinks.length > 0) {
+          setCurrentEpisode(targetEp);
+          setCurrentLinks(newLinks);
+          setCurrentLinkIndex(0);
+          attemptedLinkIndicesRef.current.clear();
+          setCurrentTime(0);
+          setDuration(0);
+          setIsVideoReady(false);
+          setIsBuffering(true);
+        } else {
+          alert(`No stream links found for Episode ${targetEp.episode}`);
+        }
+      }
+    } catch (err) {
+      console.error('[PlayerOverlay] Failed to load episode:', err);
+      alert(`Error loading Episode ${targetEp.episode}: ${err}`);
+    } finally {
+      setIsExtractingEpisode(false);
+    }
+  };
+
+  // ── Mirror Failover (CloudStream hasNextMirror / nextMirror) ───────────────
+  const tryNextMirror = (failedReason: string) => {
+    attemptedLinkIndicesRef.current.add(currentLinkIndex);
+    const availableIndices = currentLinks
+      .map((_, i) => i)
+      .filter((i) => !attemptedLinkIndicesRef.current.has(i));
+
+    if (availableIndices.length > 0) {
+      const nextIdx = availableIndices[0];
+      setFailoverNotice(
+        `Mirror failed (${failedReason}). Auto-switching to '${currentLinks[nextIdx].name}' (${nextIdx + 1}/${currentLinks.length})...`
+      );
+      setTimeout(() => setFailoverNotice(null), 4000);
+      setCurrentLinkIndex(nextIdx);
+    } else {
+      // All mirrors exhausted: trigger detailed diagnostics modal
+      invoke<PlayerDiagnostics>('player_get_diagnostics')
+        .then((diag) => {
+          setPlaybackError({
+            message: 'All available stream mirrors failed to load.',
+            reason: failedReason,
+            diagnostics: diag,
+          });
+        })
+        .catch(() => {
+          setPlaybackError({
+            message: 'All available stream mirrors failed to load.',
+            reason: failedReason,
+            diagnostics: {},
+          });
+        });
+    }
+  };
+
+  // ── Native MPV Stream Loading ─────────────────────────────────────────────
   useEffect(() => {
     if (!activeLink?.url) return;
     if (loadedUrlRef.current === activeLink.url) return;
@@ -209,16 +422,20 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     setIsBuffering(true);
     setBufferedTime(0);
 
-    const title = `${item.name} · ${episode.name || `Episode ${episode.episode}`}`;
+    const title = `${item.name} · ${
+      currentEpisode.name || `Episode ${currentEpisode.episode}`
+    }`;
     console.log('[PlayerOverlay] Loading stream in native MPV:', activeLink.url);
+
     invoke('player_load', {
       url: activeLink.url,
       title,
       headers: activeLink.headers || null,
     }).catch((e: unknown) => {
       console.error('[PlayerOverlay] Failed to load stream in native MPV:', e);
+      tryNextMirror(String(e));
     });
-  }, [activeLink?.url]);
+  }, [activeLink?.url, currentEpisode]);
 
   // ── Listen to Native Player Events ────────────────────────────────────────
   useEffect(() => {
@@ -242,7 +459,6 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       unlistenTime = await listen<number>('player://time-pos', (e) => {
         if (typeof e.payload === 'number') {
           setCurrentTime(e.payload);
-          // Only mark video ready if playback has actually moved forward into active presentation
           if (e.payload > 0.3) {
             setIsVideoReady(true);
             setIsBuffering(false);
@@ -254,10 +470,6 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         if (typeof e.payload === 'number') {
           setDuration(e.payload);
         }
-      });
-
-      unlistenFileLoaded = await listen('player://file-loaded', () => {
-        // Metadata loaded; stay in loading screen until video frames actually render
       });
 
       unlistenPaused = await listen<boolean>('player://paused', (e) => {
@@ -274,14 +486,17 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         }
       });
 
-      unlistenVideoReady = await listen<{ load_id?: number; ready: boolean }>('player://video-ready', (e) => {
-        if (e.payload?.ready) {
-          setIsVideoReady(true);
-          setIsBuffering(false);
-        } else {
-          setIsVideoReady(false);
+      unlistenVideoReady = await listen<{ load_id?: number; ready: boolean }>(
+        'player://video-ready',
+        (e) => {
+          if (e.payload?.ready) {
+            setIsVideoReady(true);
+            setIsBuffering(false);
+          } else {
+            setIsVideoReady(false);
+          }
         }
-      });
+      );
 
       unlistenTrackList = await listen<unknown>('player://track-list', (e) => {
         const parsed = normalizeTrackList(e.payload);
@@ -335,16 +550,18 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
 
       unlistenError = await listen<PlayerErrorPayload>('player://error', (e) => {
         console.error('[PlayerOverlay] Native playback error received:', e.payload);
-        setPlaybackError(e.payload);
-        setIsPlaying(false);
-        setIsBuffering(false);
+        tryNextMirror(e.payload.reason || 'Playback decoding error');
       });
 
+      // Video Ended / EOF event (CloudStream VideoEndedEvent)
       unlistenEnded = await listen('player://ended', () => {
         setIsPlaying(false);
+        if (hasNextEp) {
+          setNextCountdown(5);
+        }
       });
 
-      // Initial track list fetch
+      // Initial track fetch
       invoke('player_get_tracks')
         .then((res) => {
           const parsed = normalizeTrackList(res);
@@ -372,31 +589,68 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       if (unlistenError) unlistenError();
       if (unlistenEnded) unlistenEnded();
     };
-  }, []);
+  }, [hasNextEp, currentLinkIndex, currentLinks]);
 
-  // ── AniSkip ───────────────────────────────────────────────────────────────
+  // ── Next Episode Countdown Timer ──────────────────────────────────────────
+  useEffect(() => {
+    if (nextCountdown === null) return;
+    if (nextCountdown <= 0) {
+      setNextCountdown(null);
+      if (nextEp) handleSwitchEpisode(nextEp);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setNextCountdown((prev) => (prev !== null ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [nextCountdown, nextEp]);
+
+  // ── Auto-trigger Next Countdown near video end (>96% progress) ────────────
+  useEffect(() => {
+    if (
+      duration > 60 &&
+      currentTime > 0 &&
+      currentTime / duration > 0.96 &&
+      hasNextEp &&
+      nextCountdown === null &&
+      !isExtractingEpisode
+    ) {
+      setNextCountdown(6);
+    }
+  }, [currentTime, duration, hasNextEp, nextCountdown, isExtractingEpisode]);
+
+  // ── AniSkip Integration ───────────────────────────────────────────────────
   useEffect(() => {
     async function loadSkip() {
       try {
         const intervals: SkipInterval[] = await invoke('get_anime_skip', {
           malId: 5114,
-          episodeNum: episode.episode,
+          episodeNum: currentEpisode.episode,
           episodeLength: duration > 0 ? duration : 1440,
         });
         setSkipIntervals(intervals);
       } catch (e) {
-        console.error('AniSkip error:', e);
+        console.error('AniSkip fetch error:', e);
       }
     }
     loadSkip();
-  }, [episode, duration]);
+  }, [currentEpisode, duration]);
 
   useEffect(() => {
-    const matched = skipIntervals.find((s) => currentTime >= s.start && currentTime <= s.end);
+    const matched = skipIntervals.find(
+      (s) => currentTime >= s.start && currentTime <= s.end
+    );
     setCurrentSkip(matched || null);
-  }, [currentTime, skipIntervals]);
 
-  // ── Watch progress ────────────────────────────────────────────────────────
+    // Auto-skip opening/ending if enabled
+    if (matched && autoSkipIntroOutro && currentTime < matched.end - 1) {
+      invoke('player_seek', { position: matched.end });
+      triggerFeedback('forward', `Auto-Skipped ${matched.skip_type}`);
+      setCurrentSkip(null);
+    }
+  }, [currentTime, skipIntervals, autoSkipIntroOutro]);
+
+  // ── Save Watch History Progress ───────────────────────────────────────────
   useEffect(() => {
     const saveProgress = () => {
       if (duration > 0 && currentTime > 0) {
@@ -406,9 +660,9 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             provider_id: item.api_name,
             title: item.name,
             poster_url: item.poster_url,
-            episode_num: episode.episode,
-            season_num: episode.season,
-            episode_name: episode.name,
+            episode_num: currentEpisode.episode,
+            season_num: currentEpisode.season || 1,
+            episode_name: currentEpisode.name,
             position_ms: Math.floor(currentTime * 1000),
             duration_ms: Math.floor(duration * 1000),
             last_watched_at: Date.now(),
@@ -422,22 +676,41 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       clearInterval(interval);
       saveProgress();
     };
-  }, [currentTime, duration, item, episode]);
+  }, [currentTime, duration, item, currentEpisode]);
 
-  // ── Fullscreen sync ───────────────────────────────────────────────────────
+  // ── Fullscreen Sync ───────────────────────────────────────────────────────
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
-  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // ── Keyboard Shortcuts (CloudStream Player Parity) ─────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept typing in inputs
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+
       resetHudTimer();
 
       switch (e.key) {
         case ' ':
+          // Hold-to-speed gesture on space bar
+          if (!e.repeat && isPlaying && !isHoldingSpeedRef.current) {
+            isHoldingSpeedRef.current = true;
+            setNormalSpeedBeforeHold(playbackSpeed);
+            holdTimerRef.current = setTimeout(() => {
+              invoke('player_set_speed', { speed: 2.0 });
+              setIsSpeedBoosted(true);
+            }, 250);
+          }
+          break;
         case 'k':
         case 'K':
           e.preventDefault();
@@ -447,13 +720,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         case 'j':
         case 'J':
           e.preventDefault();
-          seekRelative(-10);
+          seekRelative(e.shiftKey ? -5 : e.ctrlKey ? -30 : -10);
           break;
         case 'ArrowRight':
         case 'l':
         case 'L':
           e.preventDefault();
-          seekRelative(10);
+          seekRelative(e.shiftKey ? 5 : e.ctrlKey ? 30 : 10);
           break;
         case 'ArrowUp':
           e.preventDefault();
@@ -483,19 +756,46 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           e.preventDefault();
           toggleFullscreen();
           break;
+        case 'n':
+        case 'N':
+          e.preventDefault();
+          if (nextEp) handleSwitchEpisode(nextEp);
+          break;
+        case 'p':
+        case 'P':
+          e.preventDefault();
+          if (prevEp) handleSwitchEpisode(prevEp);
+          break;
+        case 'e':
+        case 'E':
+          e.preventDefault();
+          if (hasMultipleEpisodes) setShowEpisodeDrawer((prev) => !prev);
+          break;
+        case 's':
+        case 'S':
+          e.preventDefault();
+          cycleSubtitles();
+          break;
+        case 'a':
+        case 'A':
+          e.preventDefault();
+          cycleAudio();
+          break;
         case 'd':
         case 'D':
           e.preventDefault();
           toggleDiagnostics();
           break;
+        case 'z':
+        case 'Z':
+          e.preventDefault();
+          togglePanscan();
+          break;
         case '[': {
           e.preventDefault();
           const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
           const currIdx = speeds.indexOf(playbackSpeed);
-          if (currIdx > 0) {
-            const next = speeds[currIdx - 1];
-            changeSpeed(next);
-          }
+          if (currIdx > 0) changeSpeed(speeds[currIdx - 1]);
           break;
         }
         case ']': {
@@ -503,8 +803,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
           const currIdx = speeds.indexOf(playbackSpeed);
           if (currIdx !== -1 && currIdx < speeds.length - 1) {
-            const next = speeds[currIdx + 1];
-            changeSpeed(next);
+            changeSpeed(speeds[currIdx + 1]);
           }
           break;
         }
@@ -518,21 +817,26 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           e.preventDefault();
           adjustSubDelay(0.1);
           break;
-        case 'z':
-        case 'Z':
-          e.preventDefault();
-          togglePanscan();
-          break;
         case 'Escape':
           e.preventDefault();
-          if (showDiagnostics) {
+          if (showEpisodeDrawer) {
+            setShowEpisodeDrawer(false);
+          } else if (showDiagnostics) {
             setShowDiagnostics(false);
+          } else if (showDelayModal) {
+            setShowDelayModal(false);
+          } else if (showOnlineSubModal) {
+            setShowOnlineSubModal(false);
           } else if (showSubMenu) {
             setShowSubMenu(false);
           } else if (showAudioMenu) {
             setShowAudioMenu(false);
           } else if (showServerPicker) {
             setShowServerPicker(false);
+          } else if (showSettingsMenu) {
+            setShowSettingsMenu(false);
+          } else if (nextCountdown !== null) {
+            setNextCountdown(null);
           } else if (document.fullscreenElement) {
             document.exitFullscreen().catch(() => {});
           } else {
@@ -542,8 +846,28 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+        if (isHoldingSpeedRef.current) {
+          if (isSpeedBoosted) {
+            invoke('player_set_speed', { speed: normalSpeedBeforeHold });
+            setIsSpeedBoosted(false);
+          } else {
+            togglePlay();
+          }
+          isHoldingSpeedRef.current = false;
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, [
     isPlaying,
     isVideoReady,
@@ -552,12 +876,21 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     showSubMenu,
     showAudioMenu,
     showServerPicker,
+    showEpisodeDrawer,
+    showDelayModal,
+    showOnlineSubModal,
     playbackSpeed,
+    normalSpeedBeforeHold,
+    isSpeedBoosted,
     subDelay,
     panscanVal,
+    hasMultipleEpisodes,
+    nextEp,
+    prevEp,
+    nextCountdown,
   ]);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ── Playback Controls ─────────────────────────────────────────────────────
   const togglePlay = () => {
     if (!isVideoReady) return;
     if (isPlaying) {
@@ -568,12 +901,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
       invoke('player_play');
       setIsPlaying(true);
       triggerFeedback('play');
+      setShowPausedMetadata(false);
     }
   };
 
   const seekRelative = (offset: number) => {
     invoke('player_seek_relative', { offset });
-    triggerFeedback(offset > 0 ? 'forward' : 'rewind');
+    triggerFeedback(offset > 0 ? 'forward' : 'rewind', `${Math.abs(offset)}s`);
   };
 
   const toggleMute = () => {
@@ -599,7 +933,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
   const handleSkipAction = () => {
     if (currentSkip) {
       invoke('player_seek', { position: currentSkip.end });
-      triggerFeedback('forward');
+      triggerFeedback('forward', `Skipped ${currentSkip.skip_type}`);
       setCurrentSkip(null);
     }
   };
@@ -623,81 +957,87 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
   };
 
   const togglePanscan = () => {
-    const next = panscanVal === 0.0 ? 1.0 : 0.0;
+    const next = panscanVal === 0.0 ? 1.0 : panscanVal === 1.0 ? 0.5 : 0.0;
     invoke('player_set_panscan', { panscan: next });
     setPanscanVal(next);
+    triggerFeedback(
+      'aspect',
+      next === 0.0 ? 'Fit (Keep Aspect)' : next === 1.0 ? 'Fill (Crop / Zoom)' : 'Wide Fit'
+    );
   };
 
   const adjustSubDelay = (delta: number) => {
-    const next = Math.round((subDelay + delta) * 10) / 10;
+    const next = Math.round((subDelay + delta) * 100) / 100;
     invoke('player_set_subtitle_delay', { delay: next });
     setSubDelay(next);
+    triggerFeedback(
+      'speed',
+      `Sub Sync: ${next > 0 ? `+${next.toFixed(2)}s` : `${next.toFixed(2)}s`}`
+    );
   };
 
   const resetSubDelay = () => {
     invoke('player_set_subtitle_delay', { delay: 0.0 });
     setSubDelay(0.0);
+    triggerFeedback('speed', 'Sub Sync: 0.00s');
   };
 
-  const handleSearchExternalSubs = async () => {
-    setIsLoadingSubs(true);
+  // ── Online Subtitles Search ───────────────────────────────────────────────
+  const handleSearchOnlineSubs = async () => {
+    setIsSearchingOnlineSubs(true);
     try {
+      const q = onlineSubQuery.trim() || item.name;
       const res: SubtitleData[] = await invoke('search_subtitles', {
-        query: item.name,
-        lang: preferredSubLang || 'en',
+        query: q,
+        lang: onlineSubLang,
       });
-      setExternalSubs(res);
-    } catch (e) {
-      console.error('Failed to search subtitles:', e);
+      setOnlineSubResults(res || []);
+    } catch (err) {
+      console.error('Online sub search error:', err);
     } finally {
-      setIsLoadingSubs(false);
+      setIsSearchingOnlineSubs(false);
     }
   };
 
-  const handleAddExternalSub = async (sub: SubtitleData) => {
+  const handleSelectOnlineSub = async (sub: SubtitleData) => {
     try {
       await invoke('player_add_subtitle', { urlOrPath: sub.url });
-      setShowSubMenu(false);
-    } catch (e) {
-      console.error('Failed to add external subtitle:', e);
+      setExternalSubs((prev) => [...prev, sub]);
+      setShowOnlineSubModal(false);
+      triggerFeedback('speed', `Loaded: ${sub.language || 'Subtitle'}`);
+    } catch (err) {
+      console.error('Failed to load online subtitle:', err);
+      alert(`Failed to load subtitle: ${err}`);
     }
   };
 
-  // Filter embedded tracks
+  // ── Tracks Filtering & Helpers ────────────────────────────────────────────
   const audioTracks = tracks.filter((t) => t.type === 'audio');
   const subTracks = tracks.filter((t) => t.type === 'sub');
 
-  // Auto track resolution results using SubtitleHelper (CloudStream logic)
   const autoSubMatch = useMemo(() => {
     return getAutoSelectSubtitle(subTracks, externalSubs, preferredSubLang);
   }, [subTracks, externalSubs, preferredSubLang]);
 
   const autoAudioMatch = useMemo(() => {
-    return getAutoSelectAudio(audioTracks, preferredAudioLang);
-  }, [audioTracks, preferredAudioLang]);
+    return getAutoSelectAudio(audioTracks, 'auto');
+  }, [audioTracks]);
 
-  // Synchronize auto track selections
-  useEffect(() => {
-    if (isAutoSub && subTracks.length > 0) {
-      if (autoSubMatch?.track) {
-        if (activeSid !== autoSubMatch.track.id) {
-          invoke('player_set_subtitle_track', { sid: autoSubMatch.track.id }).catch(() => {});
-          setActiveSid(autoSubMatch.track.id);
-        }
-      }
-    }
-  }, [isAutoSub, subTracks, autoSubMatch, activeSid]);
+  // Track cycling helpers (keyboard shortcuts S & A)
+  const cycleSubtitles = () => {
+    if (subTracks.length === 0) return;
+    const allOptions = [0, ...subTracks.map((t) => t.id)];
+    const currPos = allOptions.indexOf(activeSid);
+    const nextId = allOptions[(currPos + 1) % allOptions.length];
+    handleSelectSubTrack(nextId);
+  };
 
-  useEffect(() => {
-    if (isAutoAudio && audioTracks.length > 0) {
-      if (autoAudioMatch?.track) {
-        if (activeAid !== autoAudioMatch.track.id) {
-          invoke('player_set_audio_track', { aid: autoAudioMatch.track.id }).catch(() => {});
-          setActiveAid(autoAudioMatch.track.id);
-        }
-      }
-    }
-  }, [isAutoAudio, audioTracks, autoAudioMatch, activeAid]);
+  const cycleAudio = () => {
+    if (audioTracks.length <= 1) return;
+    const currPos = audioTracks.findIndex((t) => t.id === activeAid);
+    const nextTrack = audioTracks[(currPos + 1) % audioTracks.length];
+    handleSelectAudioTrack(nextTrack.id);
+  };
 
   const handleSelectAutoSub = () => {
     setIsAutoSub(true);
@@ -715,6 +1055,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     localStorage.setItem('player_auto_sub', 'false');
     invoke('player_set_subtitle_track', { sid: 0 }).catch(() => {});
     setActiveSid(0);
+    triggerFeedback('speed', 'Subtitles: Off');
   };
 
   const handleSelectSubTrack = (sid: number) => {
@@ -722,6 +1063,8 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     localStorage.setItem('player_auto_sub', 'false');
     invoke('player_set_subtitle_track', { sid }).catch(() => {});
     setActiveSid(sid);
+    const matched = subTracks.find((t) => t.id === sid);
+    triggerFeedback('speed', `Subtitle: ${matched?.lang || matched?.title || 'Track ' + sid}`);
   };
 
   const handleSelectAutoAudio = () => {
@@ -740,21 +1083,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     localStorage.setItem('player_auto_audio', 'false');
     invoke('player_set_audio_track', { aid }).catch(() => {});
     setActiveAid(aid);
+    const matched = audioTracks.find((t) => t.id === aid);
+    triggerFeedback('speed', `Audio: ${matched?.lang || matched?.title || 'Track ' + aid}`);
   };
 
-  const handleChangePreferredSubLang = (lang: string) => {
-    setPreferredSubLang(lang);
-    localStorage.setItem('player_preferred_sub_lang', lang);
-    invoke('player_set_preferred_languages', { slang: lang, alang: preferredAudioLang }).catch(() => {});
-  };
-
-  const handleChangePreferredAudioLang = (lang: string) => {
-    setPreferredAudioLang(lang);
-    localStorage.setItem('player_preferred_audio_lang', lang);
-    invoke('player_set_preferred_languages', { slang: preferredSubLang, alang: lang }).catch(() => {});
-  };
-
-  // Timeline hover handlers
+  // ── Timeline & Time Format ────────────────────────────────────────────────
   const handleTimelineMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (duration <= 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -778,29 +1111,73 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  // Mouse wheel volume on video (safely bypasses scrolling inside episode list, menus, or modals)
+  const handleWheel = (e: React.WheelEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest(
+        '.player-episodes-drawer, .drawer-list-scroll, .drawer-seasons-row, .player-popover-card, .player-tuner-card, .player-online-sub-card, .player-dropdown-menu, .player-diagnostics-card, .online-sub-results-scroll, input, select, textarea'
+      )
+    ) {
+      return;
+    }
+
+    e.preventDefault();
+    resetHudTimer();
+    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+    setVolume((prev) => {
+      const n = Math.max(0, Math.min(1, Math.round((prev + delta) * 100) / 100));
+      invoke('player_set_volume', { volume: n * 100 });
+      triggerFeedback('volume', `${Math.round(n * 100)}%`);
+      return n;
+    });
+  };
+
   return (
     <div
-      className={`player-container${showHud ? ' hud-active' : ''}${!isVideoReady ? ' player-loading-mode' : ''}`}
+      className={`player-container${showHud ? ' hud-active' : ''}${
+        !isVideoReady ? ' player-loading-mode' : ''
+      }`}
       onMouseMove={resetHudTimer}
+      onWheel={handleWheel}
     >
-      {/* While video is initializing/buffering, render solid backdrop with simple loading circle only */}
+      {/* ── Solid Loading Backdrop ── */}
       {backdropMounted && (
         <div className={`player-loading-backdrop${backdropFading ? ' fade-out' : ''}`}>
           <div className="player-buffering-spinner" />
           {bufferingPercent > 0 && bufferingPercent < 100 && (
             <div className="player-buffering-pct">{Math.round(bufferingPercent)}%</div>
           )}
+          {isExtractingEpisode && (
+            <div className="player-extracting-label">Loading episode streams...</div>
+          )}
         </div>
       )}
 
-      {/* Click surface for Play/Pause and Double Click Fullscreen */}
+      {/* ── Video Click Surface & Gestures ── */}
       <div
         className="player-video-surface"
         onClick={togglePlay}
         onDoubleClick={toggleFullscreen}
       />
 
-      {/* Center Buffering Spinner for mid-playback caching */}
+      {/* ── Failover Toast Notice ── */}
+      {failoverNotice && (
+        <div className="player-failover-toast">
+          <RefreshCw size={15} className="spin-fast" />
+          <span>{failoverNotice}</span>
+        </div>
+      )}
+
+      {/* ── Speed Boost Floating Pill (Hold-to-speed gesture) ── */}
+      {isSpeedBoosted && (
+        <div className="player-speed-boost-badge">
+          <Zap size={18} fill="#f59e0b" color="#f59e0b" />
+          <span>2.0X SPEED</span>
+        </div>
+      )}
+
+      {/* ── Mid-Playback Buffering Spinner ── */}
       {isVideoReady && isBuffering && (
         <div className="player-buffering-overlay">
           <div className="player-buffering-spinner" />
@@ -810,7 +1187,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         </div>
       )}
 
-      {/* Center Feedback Ripple */}
+      {/* ── Center Ripple Feedback ── */}
       {centerFeedback && (
         <div key={centerFeedback.id} className="player-center-ripple">
           {centerFeedback.type === 'play' && <Play size={36} fill="#fff" />}
@@ -823,10 +1200,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           {centerFeedback.type === 'volume' && (
             <span style={{ fontSize: '16px', fontWeight: 800 }}>{centerFeedback.label}</span>
           )}
+          {centerFeedback.type === 'aspect' && (
+            <span style={{ fontSize: '15px', fontWeight: 800 }}>{centerFeedback.label}</span>
+          )}
         </div>
       )}
 
-      {/* AniSkip Button */}
+      {/* ── AniSkip Pill Button ── */}
       {currentSkip && (
         <button className="player-skip-pill" onClick={handleSkipAction}>
           <FastForward size={16} />
@@ -834,34 +1214,307 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         </button>
       )}
 
-      {/* Diagnostics Modal */}
-      {showDiagnostics && diagnosticsData && (
+      {/* ── Paused Metadata Scrim (CloudStream showPlayerMetadata parity) ── */}
+      {showPausedMetadata && !isPlaying && (
+        <div className="player-metadata-scrim animate-fade-in" onClick={() => togglePlay()}>
+          <div className="player-meta-scrim-content" onClick={(e) => e.stopPropagation()}>
+            <div className="player-meta-scrim-title">{item.name}</div>
+            <div className="player-meta-scrim-sub">
+              {currentEpisode.season && `Season ${currentEpisode.season} • `}
+              Episode {currentEpisode.episode}
+              {currentEpisode.name ? `: ${currentEpisode.name}` : ''}
+            </div>
+            {mediaDetails && (
+              <div className="player-meta-scrim-tags">
+                {mediaDetails.year && <span>{mediaDetails.year}</span>}
+                {mediaDetails.score && (
+                  <span className="scrim-imdb-badge">★ {mediaDetails.score.toFixed(1)}</span>
+                )}
+                {mediaDetails.tags?.slice(0, 3).map((tag) => (
+                  <span key={tag} className="scrim-tag-chip">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {mediaDetails?.plot && (
+              <p className="player-meta-scrim-plot">{mediaDetails.plot}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Next Episode Auto-Countdown Card ── */}
+      {nextCountdown !== null && nextEp && (
+        <div className="player-next-ep-card animate-slide-up">
+          <div className="next-ep-header">
+            <span className="next-ep-label">UP NEXT IN {nextCountdown}s</span>
+            <button className="next-ep-close-btn" onClick={() => setNextCountdown(null)}>
+              <X size={14} />
+            </button>
+          </div>
+          <div className="next-ep-body">
+            <div className="next-ep-title">
+              S{nextEp.season || 1}:E{nextEp.episode} - {nextEp.name || `Episode ${nextEp.episode}`}
+            </div>
+          </div>
+          <div className="next-ep-actions">
+            <button
+              className="next-ep-play-btn"
+              onClick={() => handleSwitchEpisode(nextEp)}
+              disabled={isExtractingEpisode}
+            >
+              <Play size={14} fill="#fff" />
+              <span>{isExtractingEpisode ? 'Loading...' : 'Play Now'}</span>
+            </button>
+            <button className="next-ep-cancel-btn" onClick={() => setNextCountdown(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── IN-PLAYER EPISODE DRAWER (CloudStream showEpisodesOverlay) ── */}
+      {showEpisodeDrawer && (
+        <>
+          {/* Transparent/dim click-away backdrop over video */}
+          <div
+            className="player-episodes-backdrop"
+            onClick={() => setShowEpisodeDrawer(false)}
+          />
+
+          {/* Solid slide-in episode drawer */}
+          <div
+            className="player-episodes-drawer"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <div className="drawer-header">
+              <div className="drawer-title-box">
+                <ListVideo size={18} color="#a855f7" />
+                <span className="drawer-title">Episodes</span>
+              </div>
+              <button
+                className="drawer-close-btn"
+                onClick={() => setShowEpisodeDrawer(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Season Selector */}
+            {drawerSeasons.length > 1 && (
+              <div
+                className="drawer-seasons-row"
+                onWheel={(e) => {
+                  e.stopPropagation();
+                  if (e.deltaY !== 0) {
+                    e.currentTarget.scrollLeft += e.deltaY;
+                  }
+                }}
+              >
+                {drawerSeasons.map((sNum) => (
+                  <button
+                    key={sNum}
+                    className={`drawer-season-pill${drawerSeason === sNum ? ' active' : ''}`}
+                    onClick={() => setDrawerSeason(sNum)}
+                  >
+                    Season {sNum}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Search filter */}
+            <div className="drawer-search-box">
+              <input
+                type="text"
+                placeholder="Search episodes..."
+                value={drawerSearch}
+                onChange={(e) => setDrawerSearch(e.target.value)}
+              />
+              {drawerSearch ? (
+                <button onClick={() => setDrawerSearch('')}>
+                  <X size={14} />
+                </button>
+              ) : (
+                <Search size={15} style={{ opacity: 0.6, flexShrink: 0 }} />
+              )}
+            </div>
+
+            {/* Episode List */}
+            <div
+              className="drawer-list-scroll"
+              onWheel={(e) => e.stopPropagation()}
+            >
+              {drawerEpisodes.map((ep) => {
+                const isCurrent =
+                  (ep.season || 1) === (currentEpisode.season || 1) &&
+                  ep.episode === currentEpisode.episode;
+                return (
+                  <div
+                    key={`${ep.season || 1}_${ep.episode}`}
+                    className={`drawer-ep-card${isCurrent ? ' current-playing' : ''}`}
+                    onClick={() => handleSwitchEpisode(ep)}
+                  >
+                    <div className="drawer-ep-thumb-wrap">
+                      <img
+                        src={
+                          ep.poster_url ||
+                          item.poster_url ||
+                          'https://via.placeholder.com/320x180?text=Episode'
+                        }
+                        alt={ep.name || `Episode ${ep.episode}`}
+                        className="drawer-ep-thumb"
+                      />
+                      {isCurrent && (
+                        <div className="drawer-playing-tag">
+                          <span className="drawer-live-dot" />
+                          <span>PLAYING</span>
+                        </div>
+                      )}
+                      <div className="drawer-play-hover">
+                        <Play size={18} fill="#fff" color="#fff" />
+                      </div>
+                    </div>
+                    <div className="drawer-ep-info">
+                      <div className="drawer-ep-title" title={ep.name}>
+                        {ep.episode}. {ep.name || `Episode ${ep.episode}`}
+                      </div>
+                      {ep.release_date && (
+                        <div className="drawer-ep-date">{ep.release_date}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {drawerEpisodes.length === 0 && (
+                <div className="drawer-empty">No episodes found</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Subtitle Delay Adjustment Tuner Modal ── */}
+      {showDelayModal && (
         <div
-          style={{
-            position: 'absolute',
-            top: '70px',
-            right: '40px',
-            background: 'rgba(15, 23, 42, 0.95)',
-            backdropFilter: 'blur(16px)',
-            border: '1px solid rgba(255, 255, 255, 0.15)',
-            borderRadius: '12px',
-            padding: '16px 20px',
-            color: '#f8fafc',
-            fontSize: '12.5px',
-            fontFamily: 'monospace',
-            zIndex: 400,
-            width: '380px',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.8)',
-          }}
+          className="player-dialog-backdrop"
+          onClick={() => setShowDelayModal(false)}
         >
           <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '12px',
-            }}
+            className="player-tuner-card"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
           >
+            <div className="tuner-header">
+              <Clock size={18} color="#38bdf8" />
+              <span>Subtitle Sync & Delay</span>
+              <button onClick={() => setShowDelayModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="tuner-body">
+              <div className="tuner-display">
+                {subDelay > 0 ? `+${subDelay.toFixed(2)}s` : `${subDelay.toFixed(2)}s`}
+              </div>
+              <div className="tuner-row">
+                <button onClick={() => adjustSubDelay(-1.0)}>-1.0s</button>
+                <button onClick={() => adjustSubDelay(-0.25)}>-250ms</button>
+                <button onClick={() => adjustSubDelay(-0.05)}>-50ms</button>
+                <button className="reset-btn" onClick={resetSubDelay}>
+                  Reset (0s)
+                </button>
+                <button onClick={() => adjustSubDelay(0.05)}>+50ms</button>
+                <button onClick={() => adjustSubDelay(0.25)}>+250ms</button>
+                <button onClick={() => adjustSubDelay(1.0)}>+1.0s</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Online Subtitles Search Modal (openOnlineSubPicker parity) ── */}
+      {showOnlineSubModal && (
+        <div
+          className="player-dialog-backdrop"
+          onClick={() => setShowOnlineSubModal(false)}
+        >
+          <div
+            className="player-online-sub-card"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <div className="online-sub-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Globe size={18} color="#c084fc" />
+                <span style={{ fontWeight: 700, fontSize: '14px' }}>
+                  Search Online Subtitles
+                </span>
+              </div>
+              <button onClick={() => setShowOnlineSubModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="online-sub-search-row">
+              <input
+                type="text"
+                placeholder="Title search query..."
+                value={onlineSubQuery}
+                onChange={(e) => setOnlineSubQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearchOnlineSubs()}
+              />
+              <select
+                value={onlineSubLang}
+                onChange={(e) => setOnlineSubLang(e.target.value)}
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.IETF_tag} value={l.IETF_tag}>
+                    {l.flag} {l.languageName}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="online-sub-btn"
+                onClick={handleSearchOnlineSubs}
+                disabled={isSearchingOnlineSubs}
+              >
+                {isSearchingOnlineSubs ? 'Searching...' : 'Search'}
+              </button>
+            </div>
+            <div
+              className="online-sub-results-scroll"
+              onWheel={(e) => e.stopPropagation()}
+            >
+              {onlineSubResults.map((s, idx) => (
+                <div
+                  key={idx}
+                  className="online-sub-item"
+                  onClick={() => handleSelectOnlineSub(s)}
+                >
+                  <div className="online-sub-item-name">
+                    <span>{s.language || 'Subtitle'}</span>
+                    <span className="online-sub-src-badge">{s.origin || 'Online'}</span>
+                  </div>
+                  <div className="online-sub-meta">{s.url}</div>
+                </div>
+              ))}
+              {!isSearchingOnlineSubs && onlineSubResults.length === 0 && (
+                <div className="online-sub-empty">No subtitles found. Try another query.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Diagnostics Modal ── */}
+      {showDiagnostics && diagnosticsData && (
+        <div
+          className="player-diagnostics-card"
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="player-popover-header">
             <span
               style={{
                 fontWeight: 700,
@@ -874,48 +1527,26 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             >
               <Cpu size={16} /> Native MPV Diagnostics
             </span>
-            <button
-              onClick={() => setShowDiagnostics(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={() => setShowDiagnostics(false)}>
               <X size={16} />
             </button>
           </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '130px 1fr',
-              rowGap: '6px',
-              lineHeight: 1.5,
-            }}
-          >
-            <span style={{ color: '#94a3b8' }}>Codec:</span>
+          <div className="player-diagnostics-grid">
+            <span>Codec:</span>
             <span style={{ color: '#38bdf8', fontWeight: 600 }}>
               {diagnosticsData.codec || 'Detecting…'}
             </span>
-
-            <span style={{ color: '#94a3b8' }}>Profile:</span>
+            <span>Profile:</span>
             <span>{diagnosticsData.codec_profile || 'Unknown'}</span>
-
-            <span style={{ color: '#94a3b8' }}>Pixel Format:</span>
-            <span>{diagnosticsData.pixel_format || 'Unknown'}</span>
-
-            <span style={{ color: '#94a3b8' }}>Resolution:</span>
+            <span>Resolution:</span>
             <span>
               {diagnosticsData.width && diagnosticsData.height
                 ? `${diagnosticsData.width} × ${diagnosticsData.height}`
                 : 'Detecting…'}
             </span>
-
-            <span style={{ color: '#94a3b8' }}>FPS:</span>
+            <span>FPS:</span>
             <span>{diagnosticsData.fps ? diagnosticsData.fps.toFixed(2) : 'Variable'}</span>
-
-            <span style={{ color: '#94a3b8' }}>HW Decoder:</span>
+            <span>HW Decoder:</span>
             <span
               style={{
                 color:
@@ -925,186 +1556,49 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 fontWeight: 700,
               }}
             >
-              {diagnosticsData.hwdec_current || 'auto'} ({diagnosticsData.hwdec_configured || 'auto'})
+              {diagnosticsData.hwdec_current || 'auto'} (
+              {diagnosticsData.hwdec_configured || 'auto'})
             </span>
-
-            <span style={{ color: '#94a3b8' }}>Video Output:</span>
+            <span>Video Output:</span>
             <span>{diagnosticsData.video_output || 'gpu-next (D3D11)'}</span>
-
-            <span style={{ color: '#94a3b8' }}>MPV Core:</span>
+            <span>MPV Core:</span>
             <span>{diagnosticsData.mpv_version || 'Embedded'}</span>
           </div>
         </div>
       )}
 
-      {/* Playback Error Detailed Modal */}
+      {/* ── Playback Error Detailed Modal ── */}
       {playbackError && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'rgba(5, 7, 13, 0.95)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '30px',
-            zIndex: 500,
-          }}
-        >
-          <div
-            style={{
-              background: '#0d1117',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              borderRadius: '16px',
-              padding: '24px 28px',
-              maxWidth: '560px',
-              width: '100%',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.9)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                marginBottom: '16px',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                paddingBottom: '12px',
-              }}
-            >
-              <div
-                style={{
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  borderRadius: '50%',
-                  width: '40px',
-                  height: '40px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#ef4444',
-                  flexShrink: 0,
-                }}
-              >
-                <X size={22} />
+        <div className="player-fatal-error-overlay">
+          <div className="player-error-modal">
+            <div className="player-error-header">
+              <div className="error-icon-box">
+                <AlertTriangle size={22} color="#ef4444" />
               </div>
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
-                  Playback Initialization Failed
+                  Playback Error
                 </div>
                 <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                  Reason: {playbackError.reason}
+                  {playbackError.reason}
                 </div>
               </div>
             </div>
-
-            <div
-              style={{
-                background: 'rgba(239, 68, 68, 0.08)',
-                border: '1px solid rgba(239, 68, 68, 0.2)',
-                borderRadius: '8px',
-                padding: '12px 14px',
-                fontSize: '13px',
-                color: '#fca5a5',
-                marginBottom: '16px',
-                lineHeight: 1.4,
-              }}
-            >
+            <p style={{ color: '#cbd5e1', fontSize: '13px', margin: '14px 0' }}>
               {playbackError.message}
-            </div>
-
-            <div
-              style={{
-                background: '#161b22',
-                borderRadius: '8px',
-                padding: '12px 14px',
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                marginBottom: '18px',
-                display: 'grid',
-                gridTemplateColumns: '130px 1fr',
-                rowGap: '4px',
-              }}
-            >
-              <span style={{ color: '#64748b' }}>Codec:</span>
-              <span>{playbackError.diagnostics.codec || 'Unavailable'}</span>
-              <span style={{ color: '#64748b' }}>HWDEC Active:</span>
-              <span>{playbackError.diagnostics.hwdec_current || 'none'}</span>
-              <span style={{ color: '#64748b' }}>Resolution:</span>
-              <span>
-                {playbackError.diagnostics.width
-                  ? `${playbackError.diagnostics.width}x${playbackError.diagnostics.height}`
-                  : 'N/A'}
-              </span>
-              <span style={{ color: '#64748b' }}>VO Backend:</span>
-              <span>{playbackError.diagnostics.video_output || 'gpu-next'}</span>
-            </div>
-
-            {playbackError.diagnostics.recent_logs &&
-              playbackError.diagnostics.recent_logs.length > 0 && (
-                <div style={{ marginBottom: '18px' }}>
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#64748b',
-                      fontWeight: 700,
-                      marginBottom: '6px',
-                    }}
-                  >
-                    RECENT ENGINE LOGS:
-                  </div>
-                  <div
-                    style={{
-                      background: '#07090e',
-                      borderRadius: '6px',
-                      padding: '8px 10px',
-                      maxHeight: '100px',
-                      overflowY: 'auto',
-                      fontSize: '11px',
-                      fontFamily: 'monospace',
-                      color: '#f87171',
-                    }}
-                  >
-                    {playbackError.diagnostics.recent_logs.slice(-5).map((l, i) => (
-                      <div key={i}>{l}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
+            </p>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              {currentLinkIndex + 1 < links.length && (
-                <button
-                  onClick={() => {
-                    setPlaybackError(null);
-                    setCurrentLinkIndex((i) => i + 1);
-                  }}
-                  style={{
-                    background: 'linear-gradient(135deg, #7c3aed, #6366f1)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    padding: '8px 18px',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Try Next Mirror ({links[currentLinkIndex + 1]?.name || 'Mirror'})
-                </button>
-              )}
               <button
-                onClick={handleClose}
-                style={{
-                  background: 'rgba(255,255,255,0.08)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: '8px',
-                  color: '#cbd5e1',
-                  padding: '8px 18px',
-                  fontSize: '13px',
-                  cursor: 'pointer',
+                className="player-pill active"
+                onClick={() => {
+                  attemptedLinkIndicesRef.current.clear();
+                  setCurrentLinkIndex(0);
+                  setPlaybackError(null);
                 }}
               >
+                Retry Mirror 1
+              </button>
+              <button className="player-pill" onClick={handleClose}>
                 Close Player
               </button>
             </div>
@@ -1112,107 +1606,72 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
         </div>
       )}
 
-      {/* Subtitles & Sync Popover */}
+      {/* ── Subtitles Popover Menu ── */}
       {showSubMenu && (
-        <div className="player-popover-card" style={{ right: '110px', width: '320px' }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="player-popover-card"
+          style={{ right: '110px', width: '320px' }}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+        >
           <div className="player-popover-header">
             <span className="player-popover-title">Subtitles & Track Sync</span>
-            <button
-              onClick={() => setShowSubMenu(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={() => setShowSubMenu(false)}>
               <X size={16} />
             </button>
           </div>
 
-          {/* Preferred Language Selector */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
-                Preferred Language
-              </span>
-              <span style={{ fontSize: '11px', color: '#a855f7', fontWeight: 600 }}>
-                {getLanguageDisplay(preferredSubLang).flag} {getLanguageDisplay(preferredSubLang).name}
-              </span>
-            </div>
-            <div style={{ position: 'relative' }}>
-              <select
-                value={preferredSubLang}
-                onChange={(e) => handleChangePreferredSubLang(e.target.value)}
-                style={{
-                  width: '100%',
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  borderRadius: '7px',
-                  color: '#e2e8f0',
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  outline: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                {LANGUAGES.map((l) => (
-                  <option key={l.IETF_tag} value={l.IETF_tag} style={{ background: '#18181b', color: '#f4f4f5' }}>
-                    {l.flag} {l.languageName} ({l.nativeName})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Subtitle list */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#64748b',
-                fontWeight: 700,
-                textTransform: 'uppercase',
+          {/* Subtitle Action Buttons: Online Search & Sync delay */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="player-pill full-width"
+              onClick={() => {
+                setShowSubMenu(false);
+                setShowOnlineSubModal(true);
               }}
             >
-              Subtitle Tracks
-            </div>
+              <Globe size={13} />
+              <span>Search Online</span>
+            </button>
+            <button
+              className="player-pill full-width"
+              onClick={() => {
+                setShowSubMenu(false);
+                setShowDelayModal(true);
+              }}
+            >
+              <Clock size={13} />
+              <span>Sync Delay</span>
+            </button>
+          </div>
 
-            {/* Auto Track Option */}
+          {/* Subtitles list */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span className="popover-section-label">Subtitle Tracks</span>
+
+            {/* Auto Track */}
             <button
               className={`player-track-item${isAutoSub ? ' active' : ''}`}
               onClick={handleSelectAutoSub}
-              style={{
-                background: isAutoSub ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.04)',
-                border: isAutoSub ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid rgba(255,255,255,0.05)',
-              }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Sparkles size={16} color={isAutoSub ? '#c084fc' : '#94a3b8'} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ fontWeight: 600 }}>Auto Track</span>
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        background: isAutoSub ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255,255,255,0.08)',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        color: isAutoSub ? '#f3e8ff' : '#94a3b8',
-                      }}
-                    >
-                      CloudStream
-                    </span>
+                    <span className="cloudstream-tag">CloudStream</span>
                   </div>
                   <span style={{ fontSize: '11px', color: isAutoSub ? '#d8b4fe' : '#64748b' }}>
-                    {autoSubMatch ? `Active: ${autoSubMatch.resolvedName}` : 'Auto-select preferred language'}
+                    {autoSubMatch
+                      ? `Active: ${autoSubMatch.resolvedName}`
+                      : 'Auto-select preferred language'}
                   </span>
                 </div>
               </div>
               {isAutoSub && <Check size={16} color="#a855f7" />}
             </button>
 
-            {/* Off Option */}
+            {/* Subtitles Off */}
             <button
               className={`player-track-item${!isAutoSub && activeSid === 0 ? ' active' : ''}`}
               onClick={handleDisableSubs}
@@ -1224,7 +1683,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
               {!isAutoSub && activeSid === 0 && <Check size={16} color="#a855f7" />}
             </button>
 
-            {/* Embedded Subtitles */}
+            {/* Embedded and Loaded Subtitles */}
             {subTracks.map((tr) => {
               const formatted = formatTrackLabel(tr);
               const isSelected = !isAutoSub && activeSid === tr.id;
@@ -1234,234 +1693,57 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   key={tr.id}
                   className={`player-track-item${isSelected ? ' active' : ''}`}
                   onClick={() => handleSelectSubTrack(tr.id)}
-                  style={{
-                    border: isAutoActive ? '1px dashed rgba(168, 85, 247, 0.5)' : undefined,
-                  }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span>{formatted.flag}</span>
                       <span>{formatted.title}</span>
-                      {isAutoActive && (
-                        <span style={{ fontSize: '10px', color: '#c084fc', background: 'rgba(168,85,247,0.2)', padding: '0 4px', borderRadius: '3px' }}>
-                          Auto
-                        </span>
-                      )}
+                      {isAutoActive && <span className="auto-sub-tag">Auto</span>}
                     </div>
                     {formatted.subtitle && (
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatted.subtitle}</span>
+                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                        {formatted.subtitle}
+                      </span>
                     )}
                   </div>
                   {isSelected && <Check size={16} color="#a855f7" />}
                 </button>
               );
             })}
-
-            {subTracks.length === 0 && (
-              <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 0' }}>
-                No embedded subtitles found.
-              </div>
-            )}
-          </div>
-
-          {/* Subtitle Delay Adjuster */}
-          {activeSid !== 0 && (
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '8px',
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: '11px',
-                    color: '#64748b',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Subtitle Sync Delay
-                </span>
-                <span
-                  style={{
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    color: subDelay === 0 ? '#cbd5e1' : '#38bdf8',
-                  }}
-                >
-                  {subDelay > 0 ? `+${subDelay.toFixed(1)}s` : `${subDelay.toFixed(1)}s`}
-                </span>
-              </div>
-              <div className="player-pills-row">
-                <button className="player-pill" onClick={() => adjustSubDelay(-0.5)}>
-                  -0.5s
-                </button>
-                <button className="player-pill" onClick={() => adjustSubDelay(-0.1)}>
-                  -0.1s
-                </button>
-                <button className="player-pill" onClick={resetSubDelay}>
-                  Reset
-                </button>
-                <button className="player-pill" onClick={() => adjustSubDelay(0.1)}>
-                  +0.1s
-                </button>
-                <button className="player-pill" onClick={() => adjustSubDelay(0.5)}>
-                  +0.5s
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* External Subtitles */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-            <button
-              onClick={handleSearchExternalSubs}
-              disabled={isLoadingSubs}
-              style={{
-                width: '100%',
-                background: 'rgba(255, 255, 255, 0.06)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '8px',
-                color: '#cbd5e1',
-                padding: '8px 12px',
-                fontSize: '12px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-              }}
-            >
-              <Subtitles size={14} />
-              <span>{isLoadingSubs ? 'Searching Subtitles…' : `Search Online Subtitles (${getLanguageDisplay(preferredSubLang).name})`}</span>
-            </button>
-
-            {externalSubs.length > 0 && (
-              <div
-                style={{
-                  marginTop: '8px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '4px',
-                  maxHeight: '120px',
-                  overflowY: 'auto',
-                }}
-              >
-                {externalSubs.map((sub, idx) => (
-                  <button
-                    key={idx}
-                    className="player-track-item"
-                    onClick={() => handleAddExternalSub(sub)}
-                  >
-                    <span>
-                      {sub.language || `Subtitle ${idx + 1}`} ({sub.format})
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {/* Audio Tracks Popover */}
+      {/* ── Audio Tracks Popover Menu ── */}
       {showAudioMenu && (
-        <div className="player-popover-card" style={{ right: '75px', width: '310px' }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="player-popover-card"
+          style={{ right: '80px', width: '310px' }}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+        >
           <div className="player-popover-header">
             <span className="player-popover-title">Audio Tracks</span>
-            <button
-              onClick={() => setShowAudioMenu(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={() => setShowAudioMenu(false)}>
               <X size={16} />
             </button>
           </div>
 
-          {/* Preferred Audio Language selector */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
-                Preferred Language
-              </span>
-              <span style={{ fontSize: '11px', color: '#a855f7', fontWeight: 600 }}>
-                {preferredAudioLang === 'auto' ? 'Default / Auto' : getLanguageDisplay(preferredAudioLang).name}
-              </span>
-            </div>
-            <select
-              value={preferredAudioLang}
-              onChange={(e) => handleChangePreferredAudioLang(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: '7px',
-                color: '#e2e8f0',
-                padding: '6px 10px',
-                fontSize: '12px',
-                outline: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              <option value="auto" style={{ background: '#18181b', color: '#f4f4f5' }}>
-                🌐 Default Stream / Auto Detect
-              </option>
-              {LANGUAGES.map((l) => (
-                <option key={l.IETF_tag} value={l.IETF_tag} style={{ background: '#18181b', color: '#f4f4f5' }}>
-                  {l.flag} {l.languageName} ({l.nativeName})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Audio Tracks */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#64748b',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-              }}
-            >
-              Audio Track Selection
-            </div>
+            <span className="popover-section-label">Available Audio Tracks</span>
 
-            {/* Auto Track Option */}
             <button
               className={`player-track-item${isAutoAudio ? ' active' : ''}`}
               onClick={handleSelectAutoAudio}
-              style={{
-                background: isAutoAudio ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.04)',
-                border: isAutoAudio ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid rgba(255,255,255,0.05)',
-              }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Sparkles size={16} color={isAutoAudio ? '#c084fc' : '#94a3b8'} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontWeight: 600 }}>Auto Track</span>
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        background: isAutoAudio ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255,255,255,0.08)',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        color: isAutoAudio ? '#f3e8ff' : '#94a3b8',
-                      }}
-                    >
-                      CloudStream
-                    </span>
-                  </div>
+                  <span style={{ fontWeight: 600 }}>Auto Track</span>
                   <span style={{ fontSize: '11px', color: isAutoAudio ? '#d8b4fe' : '#64748b' }}>
-                    {autoAudioMatch ? `Active: ${autoAudioMatch.resolvedName}` : 'Auto-select preferred audio'}
+                    {autoAudioMatch
+                      ? `Active: ${autoAudioMatch.resolvedName}`
+                      : 'Auto-select preferred audio'}
                   </span>
                 </div>
               </div>
@@ -1471,75 +1753,49 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             {audioTracks.map((tr) => {
               const formatted = formatTrackLabel(tr);
               const isSelected = !isAutoAudio && activeAid === tr.id;
-              const isAutoActive = isAutoAudio && activeAid === tr.id;
               return (
                 <button
                   key={tr.id}
                   className={`player-track-item${isSelected ? ' active' : ''}`}
                   onClick={() => handleSelectAudioTrack(tr.id)}
-                  style={{
-                    border: isAutoActive ? '1px dashed rgba(168, 85, 247, 0.5)' : undefined,
-                  }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span>{formatted.flag}</span>
                       <span>{formatted.title}</span>
-                      {isAutoActive && (
-                        <span style={{ fontSize: '10px', color: '#c084fc', background: 'rgba(168,85,247,0.2)', padding: '0 4px', borderRadius: '3px' }}>
-                          Auto
-                        </span>
-                      )}
                     </div>
                     {formatted.subtitle && (
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatted.subtitle}</span>
+                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                        {formatted.subtitle}
+                      </span>
                     )}
                   </div>
                   {isSelected && <Check size={16} color="#a855f7" />}
                 </button>
               );
             })}
-
-            {audioTracks.length === 0 && (
-              <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 0' }}>
-                Default Audio Stream
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {/* Playback Settings Popover */}
+      {/* ── Playback Settings Popover ── */}
       {showSettingsMenu && (
-        <div className="player-popover-card" style={{ right: '40px', width: '280px' }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="player-popover-card"
+          style={{ right: '40px', width: '290px' }}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+        >
           <div className="player-popover-header">
             <span className="player-popover-title">Playback Settings</span>
-            <button
-              onClick={() => setShowSettingsMenu(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={() => setShowSettingsMenu(false)}>
               <X size={16} />
             </button>
           </div>
 
-          {/* Playback Speed */}
+          {/* Speed */}
           <div>
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#64748b',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                marginBottom: '8px',
-              }}
-            >
-              Playback Speed
-            </div>
+            <span className="popover-section-label">Playback Speed</span>
             <div className="player-pills-row">
               {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((spd) => (
                 <button
@@ -1555,17 +1811,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
 
           {/* Aspect Ratio / Zoom */}
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#64748b',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                marginBottom: '8px',
-              }}
-            >
-              Aspect Ratio / Fit
-            </div>
+            <span className="popover-section-label">Aspect Ratio / Resize Mode</span>
             <div className="player-pills-row">
               <button
                 className={`player-pill${panscanVal === 0 ? ' active' : ''}`}
@@ -1574,7 +1820,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setPanscanVal(0);
                 }}
               >
-                Fit (Normal)
+                Fit (Original)
               </button>
               <button
                 className={`player-pill${panscanVal === 1 ? ' active' : ''}`}
@@ -1583,40 +1829,85 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setPanscanVal(1);
                 }}
               >
-                Fill (Crop / Zoom)
+                Fill (Crop)
               </button>
             </div>
+          </div>
+
+          {/* AniSkip Auto-Skip */}
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+              <span style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 600 }}>
+                Auto-Skip Intro & Outro
+              </span>
+              <input
+                type="checkbox"
+                checked={autoSkipIntroOutro}
+                onChange={(e) => {
+                  setAutoSkipIntroOutro(e.target.checked);
+                  localStorage.setItem('player_auto_skip_intro', String(e.target.checked));
+                }}
+              />
+            </label>
+          </div>
+
+          {/* Diagnostics toggle */}
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
+            <button
+              className="player-pill full-width"
+              onClick={() => {
+                setShowSettingsMenu(false);
+                toggleDiagnostics();
+              }}
+            >
+              <Cpu size={14} />
+              <span>Show Native Diagnostics</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* Player HUD */}
-      <div className={`player-hud${showHud ? ' visible' : ''}`}>
-        {/* ── Top bar ── */}
+      {/* ── PLAYER HUD ── */}
+      <div className={`player-hud${showHud && !showEpisodeDrawer ? ' visible' : ''}`}>
+        {/* Top bar */}
         <div className="player-top" onClick={(e) => e.stopPropagation()}>
-          {/* Back button + title text */}
           <div className="player-title-box">
-            <button
-              onClick={handleClose}
-              className="player-back-btn"
-              title="Back (Esc)"
-            >
+            <button onClick={handleClose} className="player-back-btn" title="Back (Esc)">
               <ChevronLeft size={22} />
             </button>
             <div className="player-title-text">
               <div className="player-title">{item.name}</div>
               <div className="player-subtitle">
-                {episode.name
-                  ? `${episode.name} (Episode ${episode.episode})`
-                  : `Episode ${episode.episode}`}{' '}
+                {currentEpisode.season && `S${currentEpisode.season}:`}
+                {currentEpisode.name
+                  ? `${currentEpisode.name} (Ep ${currentEpisode.episode})`
+                  : `Episode ${currentEpisode.episode}`}{' '}
                 • {activeLink?.name || 'Default Mirror'}
               </div>
             </div>
           </div>
 
-          {/* Top Right: Server Picker */}
+          {/* Top Right Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {/* Server picker */}
+            {/* Episodes Drawer Toggle Button */}
+            {hasMultipleEpisodes && (
+              <button
+                onClick={() => {
+                  setShowEpisodeDrawer(!showEpisodeDrawer);
+                  setShowServerPicker(false);
+                  setShowSubMenu(false);
+                  setShowAudioMenu(false);
+                  setShowSettingsMenu(false);
+                }}
+                className={`player-hud-pill${showEpisodeDrawer ? ' active' : ''}`}
+                title="Episodes List (E)"
+              >
+                <ListVideo size={15} />
+                <span>Episodes</span>
+              </button>
+            )}
+
+            {/* Server / Mirror Picker */}
             <div style={{ position: 'relative', flexShrink: 0 }}>
               <button
                 onClick={() => {
@@ -1624,27 +1915,33 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setShowSubMenu(false);
                   setShowAudioMenu(false);
                   setShowSettingsMenu(false);
+                  setShowEpisodeDrawer(false);
                 }}
-                className={`player-hud-pill player-hud-server-btn${showServerPicker ? ' active' : ''}`}
-                title="Select Server / Mirror"
+                className={`player-hud-pill player-hud-server-btn${
+                  showServerPicker ? ' active' : ''
+                }`}
+                title="Select Server / Mirror (O)"
               >
                 <Server size={14} />
                 <span>{activeLink?.source || 'Servers'}</span>
               </button>
 
               {showServerPicker && (
-                <div className="player-dropdown-menu">
-                  <div className="player-dropdown-title">
-                    AVAILABLE STREAM MIRRORS
-                  </div>
-                  {links.map((link, idx) => (
+                <div
+                  className="player-dropdown-menu"
+                  onWheel={(e) => e.stopPropagation()}
+                >
+                  <div className="player-dropdown-title">AVAILABLE STREAM MIRRORS</div>
+                  {currentLinks.map((link, idx) => (
                     <button
                       key={idx}
                       onClick={() => {
                         setCurrentLinkIndex(idx);
                         setShowServerPicker(false);
                       }}
-                      className={`player-dropdown-item${currentLinkIndex === idx ? ' active' : ''}`}
+                      className={`player-dropdown-item${
+                        currentLinkIndex === idx ? ' active' : ''
+                      }`}
                     >
                       <span>{link.name}</span>
                       <span className="player-dropdown-badge">{link.quality}</span>
@@ -1656,9 +1953,9 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           </div>
         </div>
 
-        {/* ── Bottom controls ── */}
+        {/* Bottom controls */}
         <div className="player-bottom" onClick={(e) => e.stopPropagation()}>
-          {/* Progress bar with buffered cache and hover timestamp tooltip */}
+          {/* Progress bar with buffered track, AniSkip chapter markers, and hover tooltip */}
           <div
             className="player-timeline-wrap"
             onMouseMove={handleTimelineMouseMove}
@@ -1687,15 +1984,30 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             {/* Played progress bar */}
             <div
               className="player-timeline-progress"
-              style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              style={{
+                width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
+              }}
             />
+
+            {/* AniSkip Visual Markers on Timeline */}
+            {duration > 0 &&
+              skipIntervals.map((s, idx) => {
+                const left = (s.start / duration) * 100;
+                const width = ((s.end - s.start) / duration) * 100;
+                const isEnding = s.skip_type.toUpperCase().includes('ED');
+                return (
+                  <div
+                    key={idx}
+                    className={`player-timeline-skip-marker${isEnding ? ' ending' : ' opening'}`}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`${s.skip_type} (${formatTime(s.start)} - ${formatTime(s.end)})`}
+                  />
+                );
+              })}
 
             {/* Hover tooltip */}
             {hoverTime !== null && (
-              <div
-                className="player-timeline-tooltip"
-                style={{ left: `${hoverPercent}%` }}
-              >
+              <div className="player-timeline-tooltip" style={{ left: `${hoverPercent}%` }}>
                 {formatTime(hoverTime)}
               </div>
             )}
@@ -1704,30 +2016,37 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
           {/* Controls row */}
           <div className="player-controls-row">
             {/* Left group */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {/* Previous Episode */}
+              {hasMultipleEpisodes && (
+                <button
+                  className="player-ctrl-btn"
+                  onClick={() => prevEp && handleSwitchEpisode(prevEp)}
+                  disabled={!hasPrevEp || isExtractingEpisode}
+                  title="Previous Episode (P)"
+                >
+                  <SkipBack size={19} />
+                </button>
+              )}
+
               {/* Play / Pause */}
               <button className="player-ctrl-btn primary" onClick={togglePlay}>
-                {isPlaying ? <Pause size={24} /> : <Play size={24} fill="#fff" />}
+                {isPlaying ? <Pause size={22} /> : <Play size={22} fill="#fff" />}
               </button>
 
-              {/* Rewind 10s */}
-              <button
-                className="player-ctrl-btn"
-                onClick={() => seekRelative(-10)}
-                title="Rewind 10s (Left Arrow / J)"
-              >
-                <RotateCcw size={20} />
-              </button>
+              {/* Next Episode */}
+              {hasMultipleEpisodes && (
+                <button
+                  className="player-ctrl-btn"
+                  onClick={() => nextEp && handleSwitchEpisode(nextEp)}
+                  disabled={!hasNextEp || isExtractingEpisode}
+                  title="Next Episode (N)"
+                >
+                  <SkipForward size={19} />
+                </button>
+              )}
 
-              {/* Forward 10s */}
-              <button
-                className="player-ctrl-btn"
-                onClick={() => seekRelative(10)}
-                title="Forward 10s (Right Arrow / L)"
-              >
-                <RotateCw size={20} />
-              </button>
-
+              {/* Volume */}
               {/* Volume */}
               <div className="player-volume-row">
                 <button
@@ -1735,7 +2054,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   onClick={toggleMute}
                   title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
                 >
-                  {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                  {isMuted || volume === 0 ? (
+                    <VolumeX size={19} />
+                  ) : (
+                    <Volume2 size={19} />
+                  )}
                 </button>
                 <input
                   type="range"
@@ -1744,6 +2067,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   max="1"
                   step="0.05"
                   value={isMuted ? 0 : volume}
+                  style={{
+                    background: `linear-gradient(to right, #9333ea 0%, #9333ea ${
+                      (isMuted ? 0 : volume) * 100
+                    }%, rgba(255, 255, 255, 0.22) ${
+                      (isMuted ? 0 : volume) * 100
+                    }%, rgba(255, 255, 255, 0.22) 100%)`,
+                  }}
                   onChange={(e) => {
                     const val = parseFloat(e.target.value);
                     setVolume(val);
@@ -1761,7 +2091,16 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
             </div>
 
             {/* Right group */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {/* Aspect ratio quick toggle */}
+              <button
+                className="player-ctrl-btn"
+                onClick={togglePanscan}
+                title="Toggle Aspect Ratio / Crop (Z)"
+              >
+                <Crop size={19} />
+              </button>
+
               {/* Subtitles */}
               <button
                 className="player-ctrl-btn"
@@ -1770,17 +2109,16 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setShowAudioMenu(false);
                   setShowSettingsMenu(false);
                   setShowServerPicker(false);
+                  setShowEpisodeDrawer(false);
                 }}
-                title="Subtitles (C)"
+                title="Subtitles & Sync (S)"
                 style={{
                   background:
-                    showSubMenu || activeSid !== 0 ? 'rgba(99, 102, 241, 0.3)' : undefined,
-                  color: showSubMenu || activeSid !== 0 ? 'var(--primary)' : undefined,
-                  padding: '6px',
-                  borderRadius: '6px',
+                    showSubMenu || activeSid !== 0 ? 'rgba(168, 85, 247, 0.28)' : undefined,
+                  color: showSubMenu || activeSid !== 0 ? '#c084fc' : undefined,
                 }}
               >
-                <Subtitles size={20} />
+                <Subtitles size={19} />
               </button>
 
               {/* Audio Tracks */}
@@ -1791,16 +2129,15 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setShowSubMenu(false);
                   setShowSettingsMenu(false);
                   setShowServerPicker(false);
+                  setShowEpisodeDrawer(false);
                 }}
-                title="Audio Tracks"
+                title="Audio Tracks (A)"
                 style={{
-                  background: showAudioMenu ? 'rgba(99, 102, 241, 0.3)' : undefined,
-                  color: showAudioMenu ? 'var(--primary)' : undefined,
-                  padding: '6px',
-                  borderRadius: '6px',
+                  background: showAudioMenu ? 'rgba(168, 85, 247, 0.28)' : undefined,
+                  color: showAudioMenu ? '#c084fc' : undefined,
                 }}
               >
-                <Headphones size={20} />
+                <Headphones size={19} />
               </button>
 
               {/* Playback Settings */}
@@ -1811,16 +2148,15 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                   setShowSubMenu(false);
                   setShowAudioMenu(false);
                   setShowServerPicker(false);
+                  setShowEpisodeDrawer(false);
                 }}
                 title="Playback Settings"
                 style={{
-                  background: showSettingsMenu ? 'rgba(99, 102, 241, 0.3)' : undefined,
-                  color: showSettingsMenu ? 'var(--primary)' : undefined,
-                  padding: '6px',
-                  borderRadius: '6px',
+                  background: showSettingsMenu ? 'rgba(168, 85, 247, 0.28)' : undefined,
+                  color: showSettingsMenu ? '#c084fc' : undefined,
                 }}
               >
-                <Sliders size={20} />
+                <Sliders size={19} />
               </button>
 
               {/* Fullscreen */}
@@ -1829,7 +2165,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({ item, episode, lin
                 onClick={toggleFullscreen}
                 title={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
               >
-                {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+                {isFullscreen ? <Minimize size={19} /> : <Maximize size={19} />}
               </button>
             </div>
           </div>

@@ -12,7 +12,7 @@ import {
   WatchHistoryItem,
   WatchlistItem,
   WatchStatusFilter,
-  getFlagFromIso,
+  LoadResponse,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MediaCard } from './components/MediaCard';
@@ -32,7 +32,6 @@ import {
   ChevronDown,
   Maximize2,
   Puzzle,
-  Globe,
   Check,
   Plus,
   Download,
@@ -46,7 +45,6 @@ import {
   X,
   SlidersHorizontal,
   Dices,
-  EyeOff,
   Tv,
   Sparkles,
   Heart,
@@ -100,9 +98,10 @@ export const App: React.FC = () => {
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
   const [selectedExtension, setSelectedExtension] = useState<string>(() => {
     try {
-      return localStorage.getItem('cloudstream_selected_extension') || 'all';
+      const saved = localStorage.getItem('cloudstream_selected_extension');
+      return (saved && saved !== 'all' && saved !== 'random' && saved !== 'none') ? saved : '';
     } catch {
-      return 'all';
+      return '';
     }
   });
 
@@ -189,26 +188,32 @@ export const App: React.FC = () => {
     item: SearchResponse;
     episode: Episode;
     links: ExtractorLink[];
+    allEpisodes?: Episode[];
+    mediaDetails?: LoadResponse;
   } | null>(null);
 
   // Load available extensions
   const loadExtensions = async () => {
     try {
       const exts: ExtensionInfo[] = await invoke('get_available_extensions');
-      setExtensions(exts);
+      const realExts = exts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none');
+      setExtensions(realExts);
 
       // Validate selectedExtension
-      const saved = localStorage.getItem('cloudstream_selected_extension') || 'all';
-      const isSpecial = saved === 'all' || saved === 'random' || saved === 'none';
-      const exists = exts.some(
+      const saved = localStorage.getItem('cloudstream_selected_extension') || '';
+      const exists = realExts.some(
         (e) => e.name.toLowerCase() === saved.toLowerCase() || e.id.toLowerCase() === saved.toLowerCase()
       );
 
-      if (exts.length === 0 || (!isSpecial && !exists)) {
-        setSelectedExtension('all');
+      if (realExts.length > 0 && (!saved || !exists || saved === 'all' || saved === 'random' || saved === 'none')) {
+        const defaultExt = realExts[0].name;
+        setSelectedExtension(defaultExt);
         try {
-          localStorage.setItem('cloudstream_selected_extension', 'all');
+          localStorage.setItem('cloudstream_selected_extension', defaultExt);
         } catch {}
+        loadHome(defaultExt);
+      } else if (realExts.length === 0) {
+        setSelectedExtension('');
       }
     } catch (e) {
       console.error('Failed to load extensions:', e);
@@ -300,6 +305,8 @@ export const App: React.FC = () => {
             item: media,
             episode: targetEp,
             links,
+            allEpisodes: details.episodes,
+            mediaDetails: details,
           });
           return;
         }
@@ -364,8 +371,10 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadExtensions();
-    const initialExt = localStorage.getItem('cloudstream_selected_extension') || 'all';
-    loadHome(initialExt);
+    const initialExt = localStorage.getItem('cloudstream_selected_extension') || '';
+    if (initialExt && initialExt !== 'all' && initialExt !== 'random' && initialExt !== 'none') {
+      loadHome(initialExt);
+    }
     loadLibraryData();
 
     // When the Rust backend finishes starting the engine + loading all plugins,
@@ -373,8 +382,6 @@ export const App: React.FC = () => {
     const unlisten = listen('engine-ready', () => {
       console.log('[App] engine-ready received — reloading extensions + home');
       loadExtensions();
-      const ext = localStorage.getItem('cloudstream_selected_extension') || 'all';
-      loadHome(ext);
     });
 
     return () => { unlisten.then(fn => fn()); };
@@ -734,71 +741,29 @@ export const App: React.FC = () => {
     );
   };
 
-  // CloudStream Virtual Providers (All, Random, None)
-  const virtualExtensions: ExtensionInfo[] = [
-    {
-      id: 'all',
-      name: 'All Extensions',
-      is_builtin: true,
-      version: 'Combined',
-      supported_types: ['Movie', 'TvSeries', 'Anime'],
-      description: 'Unified feeds across all installed extensions',
-      language: 'all',
-      has_main_page: true,
-    },
-    {
-      id: 'random',
-      name: 'Random Aggregator',
-      is_builtin: true,
-      version: 'Shuffle',
-      supported_types: ['Movie', 'TvSeries', 'Anime'],
-      description: 'Dynamic mix of random shelves across providers (CloudStream Random)',
-      language: 'all',
-      has_main_page: true,
-    },
-    {
-      id: 'none',
-      name: 'None (Offline Mode)',
-      is_builtin: true,
-      version: 'Clean',
-      supported_types: ['Movie', 'TvSeries', 'Anime'],
-      description: 'Clean screen. Shows only Continue Watching & Library without network feeds',
-      language: 'all',
-      has_main_page: true,
-    },
-  ];
-
   // Sort & filter extensions:
-  // 1. Virtual providers at top
-  // 2. Filter by search query
-  // 3. Filter by selected TV Types (if any selected)
-  // 4. Pinned extensions appear at the top, followed by alphabetically sorted
-  const sortedDropdownExts = [
-    ...virtualExtensions.filter((v) => {
-      if (!extensionSearchQuery) return true;
-      const q = extensionSearchQuery.toLowerCase();
-      return v.name.toLowerCase().includes(q) || v.description?.toLowerCase().includes(q);
-    }),
-    ...extensions
-      .filter((e) => {
-        if (e.id === 'all' || e.id === 'random' || e.id === 'none') return false;
-        const matchesQuery =
-          e.name.toLowerCase().includes(extensionSearchQuery.toLowerCase()) ||
-          e.description?.toLowerCase().includes(extensionSearchQuery.toLowerCase());
-        if (!matchesQuery) return false;
-        if (selectedTvTypes.length > 0) {
-          return e.supported_types?.some((t) => selectedTvTypes.includes(t));
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        const aPinned = pinnedExtensions.includes(a.name);
-        const bPinned = pinnedExtensions.includes(b.name);
-        if (aPinned && !bPinned) return -1;
-        if (!aPinned && bPinned) return 1;
-        return a.name.localeCompare(b.name);
-      }),
-  ];
+  // 1. Filter by search query
+  // 2. Filter by selected TV Types (if any selected)
+  // 3. Pinned extensions appear at the top, followed by alphabetically sorted
+  const sortedDropdownExts = extensions
+    .filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none')
+    .filter((e) => {
+      const matchesQuery =
+        e.name.toLowerCase().includes(extensionSearchQuery.toLowerCase()) ||
+        e.description?.toLowerCase().includes(extensionSearchQuery.toLowerCase());
+      if (!matchesQuery) return false;
+      if (selectedTvTypes.length > 0) {
+        return e.supported_types?.some((t) => selectedTvTypes.includes(t));
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const aPinned = pinnedExtensions.includes(a.name);
+      const bPinned = pinnedExtensions.includes(b.name);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      return a.name.localeCompare(b.name);
+    });
 
   if (playerState) {
     return (
@@ -806,6 +771,8 @@ export const App: React.FC = () => {
         item={playerState.item}
         episode={playerState.episode}
         links={playerState.links}
+        allEpisodes={playerState.allEpisodes}
+        mediaDetails={playerState.mediaDetails}
         onClose={() => {
           invoke('player_stop').catch(() => {});
           setPlayerState(null);
@@ -975,40 +942,61 @@ export const App: React.FC = () => {
 
           {/* Header Right Actions */}
           <div className="stremio-header-right">
-            {/* CloudStream Extension Selector Pill */}
+            {/* CloudStream home_random Parity: Pick Random Title */}
+            <button
+              className="stremio-icon-btn"
+              onClick={handlePickRandomItem}
+              title="Surprise me with a random movie/series (CloudStream Random)"
+            >
+              <Dices size={16} />
+            </button>
+
+            {/* Refresh Catalog Button */}
+            <button
+              className="stremio-icon-btn"
+              onClick={handleRefresh}
+              title="Refresh provider catalog"
+              disabled={loadingShelves || isRefreshing}
+            >
+              <RefreshCw size={15} className={isRefreshing || loadingShelves ? 'animate-spin' : ''} />
+            </button>
+
+            {/* Fullscreen Button */}
+            <button className="stremio-icon-btn" onClick={toggleFullscreen} title="Toggle Fullscreen">
+              <Maximize2 size={16} />
+            </button>
+
+            {/* CloudStream Extension Selector Pill (moved to rightmost position) */}
             <div className="extension-selector-container" ref={dropdownRef}>
               <div
                 className="stremio-ext-badge"
                 onClick={() => setShowExtensionDropdown(!showExtensionDropdown)}
                 title="Select or switch active CloudStream extension"
               >
-                {extensions.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0 ? (
+                {extensions.length === 0 ? (
                   <Puzzle size={14} color="var(--stremio-purple-light)" />
-                ) : selectedExtension === 'all' ? (
-                  <Globe size={14} color="var(--stremio-purple-light)" />
-                ) : selectedExtension === 'random' || selectedExtension === 'Random Aggregator' ? (
-                  <Dices size={14} color="#f59e0b" />
-                ) : selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)' ? (
-                  <EyeOff size={14} color="#94a3b8" />
                 ) : currentExtObj?.icon_url ? (
-                  <img
-                    src={currentExtObj.icon_url}
-                    alt={currentExtObj.name}
-                    style={{ width: '18px', height: '18px', borderRadius: '4px', objectFit: 'contain' }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
+                  <>
+                    <img
+                      src={currentExtObj.icon_url}
+                      alt={currentExtObj.name}
+                      style={{ width: '18px', height: '18px', borderRadius: '4px', objectFit: 'contain', flexShrink: 0 }}
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const sib = e.currentTarget.nextElementSibling as HTMLElement | null;
+                        if (sib) sib.style.display = 'inline-flex';
+                      }}
+                    />
+                    <span style={{ display: 'none', alignItems: 'center', justifyContent: 'center' }}>
+                      <Puzzle size={14} color="var(--stremio-purple-light)" />
+                    </span>
+                  </>
                 ) : (
-                  <span style={{ fontSize: '14px', lineHeight: 1 }}>{getFlagFromIso(currentExtObj?.language)}</span>
+                  <Puzzle size={14} color="var(--stremio-purple-light)" />
                 )}
                 <span className="stremio-ext-badge-text">
-                  {extensions.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0
+                  {extensions.length === 0
                     ? 'No Extensions'
-                    : selectedExtension === 'all'
-                    ? 'All Extensions'
-                    : selectedExtension === 'random' || selectedExtension === 'Random Aggregator'
-                    ? 'Random'
-                    : selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)'
-                    ? 'None (Offline)'
                     : currentExtObj?.name || selectedExtension}
                 </span>
                 <ChevronDown size={13} color="#8e8aa4" />
@@ -1021,7 +1009,7 @@ export const App: React.FC = () => {
                     <div className="ext-dropdown-title">
                       <span>Source Extensions</span>
                       <span style={{ fontSize: '11.5px', color: '#8e8aa4', fontWeight: 500 }}>
-                        {sortedDropdownExts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length} available
+                        {sortedDropdownExts.length} available
                       </span>
                     </div>
 
@@ -1077,42 +1065,28 @@ export const App: React.FC = () => {
                   </div>
 
                   <div className="ext-dropdown-list">
-                    {sortedDropdownExts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none').length === 0 ? (
+                    {sortedDropdownExts.length === 0 ? (
                       <div style={{ padding: '28px 16px', textAlign: 'center', color: '#8e8aa4' }}>
                         <Puzzle size={28} style={{ opacity: 0.35, marginBottom: '8px' }} />
-                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#f1f0f7' }}>No extensions installed</div>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#f1f0f7' }}>No extensions found</div>
                         <div style={{ fontSize: '11.5px', color: '#6a6688', marginTop: '4px' }}>
                           Add a repository and install extensions in Extension Manager.
                         </div>
                       </div>
                     ) : (
                     sortedDropdownExts.map((ext) => {
-                      const isAll = ext.id === 'all';
-                      const isRandom = ext.id === 'random';
-                      const isNone = ext.id === 'none';
-                      const isVirtual = isAll || isRandom || isNone;
-                      const isSelected =
-                        selectedExtension === ext.name ||
-                        (isAll && selectedExtension === 'all') ||
-                        (isRandom && selectedExtension === 'random') ||
-                        (isNone && selectedExtension === 'none');
+                      const isSelected = selectedExtension === ext.name;
                       const isPinned = pinnedExtensions.includes(ext.name);
 
                       return (
                         <div
                           key={ext.id}
                           className={`ext-option-item ${isSelected ? 'active' : ''}`}
-                          onClick={() => handleSelectExtension(isAll ? 'all' : isRandom ? 'random' : isNone ? 'none' : ext.name)}
+                          onClick={() => handleSelectExtension(ext.name)}
                           style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                         >
                           <div className="ext-option-left" style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                            {isAll ? (
-                              <Globe size={15} color="var(--stremio-purple-light)" />
-                            ) : isRandom ? (
-                              <Dices size={15} color="#f59e0b" />
-                            ) : isNone ? (
-                              <EyeOff size={15} color="#94a3b8" />
-                            ) : ext.icon_url ? (
+                            {ext.icon_url ? (
                               <img
                                 src={ext.icon_url}
                                 alt={ext.name}
@@ -1123,30 +1097,35 @@ export const App: React.FC = () => {
                                   objectFit: 'contain',
                                   background: 'rgba(255,255,255,0.04)',
                                   flexShrink: 0,
+                                  border: 'none',
                                 }}
                                 onError={(ev) => {
                                   ev.currentTarget.style.display = 'none';
                                   const sibling = ev.currentTarget.nextElementSibling as HTMLElement | null;
-                                  if (sibling) sibling.style.display = 'inline';
+                                  if (sibling) sibling.style.display = 'inline-flex';
                                 }}
                               />
-                            ) : (
-                              <span className="ext-option-flag" title={ext.language || 'Multi'}>
-                                {getFlagFromIso(ext.language)}
-                              </span>
-                            )}
-                            {/* Fallback flag shown only when image fails */}
-                            {!isVirtual && ext.icon_url && (
-                              <span className="ext-option-flag" style={{ display: 'none' }} title={ext.language || 'Multi'}>
-                                {getFlagFromIso(ext.language)}
-                              </span>
-                            )}
+                            ) : null}
+                            {/* Fallback icon shown only when image is absent or fails */}
+                            <div
+                              className="ext-option-fallback-icon"
+                              style={{
+                                display: ext.icon_url ? 'none' : 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '22px',
+                                height: '22px',
+                                borderRadius: '5px',
+                                background: 'rgba(124, 58, 237, 0.15)',
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Puzzle size={12} color="var(--stremio-purple-light)" />
+                            </div>
                             <span className="ext-option-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {ext.name}
                             </span>
-                            {isRandom && <span className="ext-virtual-tag random">RANDOM</span>}
-                            {isNone && <span className="ext-virtual-tag none">OFFLINE</span>}
-                            {ext.version && !isVirtual && (
+                            {ext.version && (
                               <span style={{ fontSize: '10px', color: '#726e8c' }}>
                                 {ext.version}
                               </span>
@@ -1154,25 +1133,23 @@ export const App: React.FC = () => {
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                            {!isVirtual && (
-                              <button
-                                type="button"
-                                title={isPinned ? 'Unpin extension' : 'Pin extension to top'}
-                                onClick={(e) => togglePinExtension(ext.name, e)}
-                                style={{
-                                  background: 'transparent',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  padding: '2px',
-                                  color: isPinned ? 'var(--stremio-purple-light)' : '#555175',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  transition: 'color 0.15s ease',
-                                }}
-                              >
-                                <Pin size={13} fill={isPinned ? 'var(--stremio-purple-light)' : 'none'} />
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              title={isPinned ? 'Unpin extension' : 'Pin extension to top'}
+                              onClick={(e) => togglePinExtension(ext.name, e)}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '2px',
+                                color: isPinned ? 'var(--stremio-purple-light)' : '#555175',
+                                display: 'flex',
+                                alignItems: 'center',
+                                transition: 'color 0.15s ease',
+                              }}
+                            >
+                              <Pin size={13} fill={isPinned ? 'var(--stremio-purple-light)' : 'none'} />
+                            </button>
                             {isSelected && <Check size={14} color="var(--stremio-purple-light)" />}
                           </div>
                         </div>
@@ -1206,38 +1183,6 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               )}
-            </div>
-
-            {/* CloudStream home_random Parity: Pick Random Title */}
-            <button
-              className="stremio-icon-btn"
-              onClick={handlePickRandomItem}
-              title="Surprise me with a random movie/series (CloudStream Random)"
-            >
-              <Dices size={16} />
-            </button>
-
-            {/* Refresh Catalog Button */}
-            <button
-              className="stremio-icon-btn"
-              onClick={handleRefresh}
-              title="Refresh provider catalog"
-              disabled={loadingShelves || isRefreshing}
-            >
-              <RefreshCw size={15} className={isRefreshing || loadingShelves ? 'animate-spin' : ''} />
-            </button>
-
-            {/* Fullscreen Button */}
-            <button className="stremio-icon-btn" onClick={toggleFullscreen} title="Toggle Fullscreen">
-              <Maximize2 size={16} />
-            </button>
-
-            {/* User Avatar Circle with Dropdown Arrow (Stremio Exact) */}
-            <div className="stremio-avatar-group" title="Profile">
-              <div className="stremio-avatar">
-                N
-              </div>
-              <ChevronDown size={13} color="#8e8aa4" />
             </div>
           </div>
         </header>
@@ -1302,48 +1247,16 @@ export const App: React.FC = () => {
                 <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
                   <div style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
                     <RefreshCw size={18} className="animate-spin" />
-                    Loading catalog from {selectedExtension === 'all' ? 'active extensions' : selectedExtension}...
+                    Loading catalog from {selectedExtension || 'extension'}...
                   </div>
                 </div>
               ) : shelves.length === 0 && continueWatchingItems.length === 0 && watchlist.length === 0 ? (
-                selectedExtension === 'none' || selectedExtension === 'None (Offline Mode)' ? (
-                  <div
-                    style={{
-                      padding: '60px 40px',
-                      textAlign: 'center',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '16px',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      margin: '40px 36px',
-                      borderRadius: '16px',
-                      border: '1px dashed rgba(255, 255, 255, 0.08)',
-                    }}
-                  >
-                    <EyeOff size={40} color="#94a3b8" />
-                    <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
-                      Offline / Minimalist Mode Active
-                    </h3>
-                    <p style={{ color: '#94a3b8', fontSize: '13.5px', maxWidth: '480px', margin: 0 }}>
-                      Provider feeds are hidden (CloudStream None mode). You can use search, continue watching your existing shows, or browse your local library.
-                    </p>
-                    <button
-                      className="btn-secondary"
-                      onClick={() => handleSelectExtension('all')}
-                      style={{ marginTop: '4px' }}
-                    >
-                      Show All Extensions
-                    </button>
-                  </div>
-                ) : (
-                  <div className="home-error-card">
-                    <Globe size={42} color="#f59e0b" />
-                    <h3>No Media Returned for {selectedExtension}</h3>
-                    <p>
-                      Could not load shelves from this extension. Ensure your network has proper connectivity (or BDIX if required), or verify if the provider requires web verification.
-                    </p>
+                <div className="home-error-card">
+                  <Puzzle size={42} color="var(--stremio-purple-light)" />
+                  <h3>No Media Returned for {selectedExtension || 'Selected Extension'}</h3>
+                  <p>
+                    Could not load shelves from this extension. Ensure your network has proper connectivity (or BDIX if required), or select another extension.
+                  </p>
                     <div className="home-error-actions">
                       <button
                         className="btn-secondary"
@@ -1369,7 +1282,6 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   </div>
-                )
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
                 <div>
@@ -1751,9 +1663,15 @@ export const App: React.FC = () => {
             setSelectedItem(null);
             loadLibraryData();
           }}
-          onPlay={(item: SearchResponse, episode: Episode, links: ExtractorLink[]) => {
+          onPlay={(
+            item: SearchResponse,
+            episode: Episode,
+            links: ExtractorLink[],
+            allEpisodes?: Episode[],
+            mediaDetails?: LoadResponse
+          ) => {
             setSelectedItem(null);
-            setPlayerState({ item, episode, links });
+            setPlayerState({ item, episode, links, allEpisodes, mediaDetails });
           }}
           onSelectItem={(newItem: SearchResponse) => {
             setSelectedItem(newItem);
