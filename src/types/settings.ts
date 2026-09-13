@@ -76,6 +76,8 @@ export interface AppSettings {
     codecs: boolean;
   };
   hardwareAcceleration: 'auto' | 'hardware' | 'software';
+  renderProfile: 'auto' | 'fast' | 'high_quality';
+  gpuVideoProcessing: boolean;
   bufferDiskMb: number;           // 0=Auto, 10..500
   bufferRamMb: number;            // 0=Auto, 10..500
   bufferDurationMinutes: number;  // 0=Auto, 1..30
@@ -158,6 +160,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     codecs: false,
   },
   hardwareAcceleration: 'auto',
+  renderProfile: 'auto',
+  gpuVideoProcessing: false,
   bufferDiskMb: 0,
   bufferRamMb: 0,
   bufferDurationMinutes: 0,

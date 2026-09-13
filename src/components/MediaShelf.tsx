@@ -19,7 +19,7 @@ interface MediaShelfProps {
   iconUrl?: string;
 }
 
-export const MediaShelf: React.FC<MediaShelfProps> = ({
+const MediaShelfComponent: React.FC<MediaShelfProps> = ({
   title,
   items,
   onSelectItem,
@@ -115,8 +115,8 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
               isContinueWatching={title.toLowerCase().includes('continue watching') || Boolean(onRemoveItem)}
               progressPercent={progressMap ? progressMap[item.url] : undefined}
               onClick={onSelectItem}
-              onPlay={onPlayItem ? (media) => onPlayItem(media) : undefined}
-              onRemove={onRemoveItem ? (media) => onRemoveItem(media) : undefined}
+              onPlay={onPlayItem}
+              onRemove={onRemoveItem}
             />
           </div>
         ))}
@@ -147,3 +147,6 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
     </div>
   );
 };
+
+// Memoized so unrelated App re-renders don't cascade into every shelf row.
+export const MediaShelf = React.memo(MediaShelfComponent);

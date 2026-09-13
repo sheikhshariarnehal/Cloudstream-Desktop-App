@@ -11,6 +11,72 @@ use std::sync::{
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+#[cfg(windows)]
+use winapi::shared::{
+    minwindef::{DWORD, UINT},
+    windef::{HMONITOR, HWND},
+    winerror::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS},
+};
+#[cfg(windows)]
+use winapi::um::{
+    wingdi::{
+        DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+        QDC_ONLY_ACTIVE_PATHS,
+    },
+    winnt::LONG,
+    winuser::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    },
+};
+
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn GetDisplayConfigBufferSizes(
+        flags: UINT,
+        num_path_array_elements: *mut UINT,
+        num_mode_info_array_elements: *mut UINT,
+    ) -> LONG;
+    fn QueryDisplayConfig(
+        flags: UINT,
+        num_path_array_elements: *mut UINT,
+        path_array: *mut DISPLAYCONFIG_PATH_INFO,
+        num_mode_info_array_elements: *mut UINT,
+        mode_info_array: *mut DISPLAYCONFIG_MODE_INFO,
+        current_topology_id: *mut u32,
+    ) -> LONG;
+    fn DisplayConfigGetDeviceInfo(request_packet: *mut DISPLAYCONFIG_DEVICE_INFO_HEADER) -> LONG;
+}
+
+#[cfg(windows)]
+const DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2: u32 = 15;
+#[cfg(windows)]
+const DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR: u32 = 2;
+
+#[cfg(windows)]
+#[repr(C)]
+struct DisplayconfigGetAdvancedColorInfo2 {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    value: u32,
+    color_encoding: u32,
+    bits_per_color_channel: u32,
+    active_color_mode: u32,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub enum DisplayOutputMode {
+    Hdr,
+    Sdr,
+    Auto,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+struct DisplayOutputState {
+    mode: DisplayOutputMode,
+    scale_percent: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PlayerDiagnostics {
     pub codec: Option<String>,
@@ -24,6 +90,10 @@ pub struct PlayerDiagnostics {
     pub video_output: Option<String>,
     pub mpv_version: Option<String>,
     pub ffmpeg_version: Option<String>,
+    pub uma_detected: bool,
+    pub gpu_video_processing_supported: bool,
+    pub gpu_video_processing_enabled: bool,
+    pub display_hdr_active: bool,
     pub recent_logs: Vec<String>,
 }
 
@@ -82,6 +152,9 @@ pub struct MpvPlayer {
     recent_logs: Arc<Mutex<VecDeque<String>>>,
     is_playing: Arc<AtomicBool>,
     video_ready_state: Arc<Mutex<VideoReadyState>>,
+    gpu_video_processing: Arc<AtomicBool>,
+    is_hdr_active_flag: Arc<AtomicBool>,
+    hwnd: i64,
     app_handle: AppHandle,
 }
 
@@ -113,14 +186,49 @@ impl MpvPlayer {
             let _ = init.set_property("target-colorspace-hint-mode", "target");
             let _ = init.set_property("tone-mapping", "bt.2390");
             let _ = init.set_property("dither-depth", "auto");
-            let _ = init.set_property("deband", "yes");
-            let _ = init.set_property("scale", "spline36");
-            let _ = init.set_property("cscale", "spline36");
+
+            // Smart GPU architecture detection (from stremio-shell-ng):
+            // If UMA (integrated GPU / APU) is detected, setting heavy spline36 + deband shaders
+            // overloads the GPU render pass, causing dropped frames and A/V desync.
+            // On UMA we use profile=fast; on dedicated GPUs we enable high-quality scalers.
+            let is_uma = crate::gpu_video_processing::unified_memory_architecture();
+            if is_uma {
+                println!("[Player] Unified Memory Architecture (iGPU/APU) detected -> Applying 'profile=fast' to prevent A/V desync.");
+                let _ = init.set_property("profile", "fast");
+            } else {
+                println!("[Player] Dedicated GPU detected -> Applying high-quality scaling (spline36 + deband).");
+                let _ = init.set_property("deband", "yes");
+                let _ = init.set_property("scale", "spline36");
+                let _ = init.set_property("cscale", "spline36");
+            }
+
+            // Hardware decoding: defaults to auto
             let _ = init.set_property("hwdec", "auto");
+
+            // Robust stream reconnection (from stremio-shell-ng)
             let _ = init.set_property(
                 "stream-lavf-o",
                 "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_on_http_error=%23%408,429,500,502,503,504,reconnect_delay_max=15",
             );
+
+            // A/V Sync and frame drop prevention:
+            // framedrop=vo drops late frames to prevent video falling behind audio.
+            // video-sync=audio ensures audio clock is master.
+            // hr-seek-framedrop prevents audio timestamp reset freezes during seeks.
+            let _ = init.set_property("framedrop", "vo");
+            let _ = init.set_property("video-sync", "audio");
+            let _ = init.set_property("audio-pitch-correction", "yes");
+            let _ = init.set_property("hr-seek", "default");
+            let _ = init.set_property("hr-seek-framedrop", "yes");
+
+            // Demuxer caching & streaming buffer optimizations:
+            let _ = init.set_property("cache", "yes");
+            let _ = init.set_property("demuxer-max-bytes", "150MiB");
+            let _ = init.set_property("demuxer-max-back-bytes", "50MiB");
+            let _ = init.set_property("demuxer-readahead-secs", "30");
+            let _ = init.set_property("demuxer-hysteresis-secs", "3");
+            let _ = init.set_property("stream-buffer-size", "512KiB");
+
             let _ = init.set_property("quiet", "yes");
 
             #[cfg(debug_assertions)]
@@ -142,6 +250,8 @@ impl MpvPlayer {
         let recent_logs = Arc::new(Mutex::new(VecDeque::with_capacity(100)));
         let is_playing = Arc::new(AtomicBool::new(false));
         let video_ready_state = Arc::new(Mutex::new(VideoReadyState::default()));
+        let gpu_video_processing = Arc::new(AtomicBool::new(false));
+        let is_hdr_active_flag = Arc::new(AtomicBool::new(false));
 
         let recent_logs_thread = Arc::clone(&recent_logs);
         let is_playing_thread = Arc::clone(&is_playing);
@@ -150,6 +260,34 @@ impl MpvPlayer {
         let mpv_shared = Arc::new(Mutex::new(Some(mpv)));
         let mpv_diag_ref = Arc::clone(&mpv_shared);
         let app_handle_thread = app_handle.clone();
+
+        // Background display monitoring thread (from stremio-shell-ng):
+        // Detects HDR / SDR active state on the display hosting the player window and adapts color space.
+        #[cfg(windows)]
+        if hwnd != 0 {
+            let mpv_display = Arc::clone(&mpv_shared);
+            let gpu_vp_display = Arc::clone(&gpu_video_processing);
+            let is_hdr_display = Arc::clone(&is_hdr_active_flag);
+            thread::spawn(move || {
+                let mut last_state = None;
+                loop {
+                    thread::sleep(std::time::Duration::from_millis(500));
+                    let Ok(guard) = mpv_display.lock() else { break; };
+                    let Some(ref mpv) = *guard else { continue; };
+                    let state = current_display_output_state(mpv, hwnd as HWND);
+                    let gpu = gpu_vp_display.load(Ordering::Relaxed);
+                    let is_hdr = state.mode == DisplayOutputMode::Hdr;
+                    is_hdr_display.store(is_hdr, Ordering::Relaxed);
+                    if last_state != Some((state, gpu)) {
+                        apply_display_output_mode(mpv, state, gpu);
+                        last_state = Some((state, gpu));
+                    }
+                }
+            });
+        }
+
+        let is_hdr_for_events = Arc::clone(&is_hdr_active_flag);
+        let gpu_vp_for_events = Arc::clone(&gpu_video_processing);
 
         thread::spawn(move || {
             let app_handle = app_handle_thread;
@@ -299,7 +437,6 @@ impl MpvPlayer {
                         println!("[MPV Event] FileLoaded");
                         video_ready_state_thread.lock().unwrap().file_loaded();
                         let _ = app_handle.emit("player://file-loaded", ());
-                        // Do NOT emit video-ready: true on FileLoaded! Video frames are not rendered yet.
                         if let Ok(guard) = mpv_diag_ref.lock() {
                             if let Some(ref mpv) = *guard {
                                 if let Ok(s) = mpv.get_property::<String>("track-list") {
@@ -338,7 +475,12 @@ impl MpvPlayer {
                                 serde_json::json!({ "reason": "eof" }),
                             );
                         } else if reason == mpv_end_file_reason::Error {
-                            let diag = Self::collect_diagnostics(&mpv_diag_ref, &recent_logs_thread);
+                            let diag = Self::collect_diagnostics(
+                                &mpv_diag_ref,
+                                &recent_logs_thread,
+                                gpu_vp_for_events.load(Ordering::Relaxed),
+                                is_hdr_for_events.load(Ordering::Relaxed),
+                            );
                             eprintln!("[MPV Error Event] Playback failed! Collected Diagnostics: {:?}", diag);
                             let payload = PlayerErrorPayload {
                                 message: "Native MPV playback encountered an unrecoverable decoding/network error.".to_string(),
@@ -362,6 +504,9 @@ impl MpvPlayer {
             recent_logs,
             is_playing,
             video_ready_state,
+            gpu_video_processing,
+            is_hdr_active_flag,
+            hwnd,
             app_handle,
         })
     }
@@ -369,13 +514,23 @@ impl MpvPlayer {
     fn collect_diagnostics(
         mpv_shared: &Arc<Mutex<Option<Mpv>>>,
         recent_logs: &Arc<Mutex<VecDeque<String>>>,
+        gpu_video_processing_enabled: bool,
+        display_hdr_active: bool,
     ) -> PlayerDiagnostics {
         let guard = mpv_shared.lock().unwrap();
         let logs: Vec<String> = recent_logs.lock().unwrap().iter().cloned().collect();
 
+        let uma_detected = crate::gpu_video_processing::unified_memory_architecture();
+        let gpu_video_processing_supported =
+            crate::gpu_video_processing::gpu_video_processing_supported();
+
         let Some(ref mpv) = *guard else {
             return PlayerDiagnostics {
                 recent_logs: logs,
+                uma_detected,
+                gpu_video_processing_supported,
+                gpu_video_processing_enabled,
+                display_hdr_active,
                 ..Default::default()
             };
         };
@@ -404,6 +559,10 @@ impl MpvPlayer {
             video_output,
             mpv_version,
             ffmpeg_version,
+            uma_detected,
+            gpu_video_processing_supported,
+            gpu_video_processing_enabled,
+            display_hdr_active,
             recent_logs: logs,
         }
     }
@@ -596,6 +755,61 @@ impl MpvPlayer {
             .map_err(|e| format!("Failed to parse track list: {:?}", e))
     }
 
+    pub fn set_hwdec(&self, mode: &str) -> Result<(), String> {
+        let guard = self.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or("MPV not initialized")?;
+        let hwdec_val = match mode {
+            "hardware" => "auto-safe",
+            "software" => "no",
+            _ => "auto",
+        };
+        println!("[Player] Setting hwdec to '{}' (requested mode: '{}')", hwdec_val, mode);
+        mpv.set_property("hwdec", hwdec_val)
+            .map_err(|e| format!("Failed to set hwdec: {:?}", e))
+    }
+
+    pub fn set_render_profile(&self, profile: &str) -> Result<(), String> {
+        let guard = self.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or("MPV not initialized")?;
+        println!("[Player] Setting render profile: '{}'", profile);
+        match profile {
+            "fast" => {
+                let _ = mpv.set_property("profile", "fast");
+                let _ = mpv.set_property("deband", "no");
+            }
+            "high_quality" => {
+                let _ = mpv.set_property("deband", "yes");
+                let _ = mpv.set_property("scale", "spline36");
+                let _ = mpv.set_property("cscale", "spline36");
+            }
+            _ => {
+                if crate::gpu_video_processing::unified_memory_architecture() {
+                    let _ = mpv.set_property("profile", "fast");
+                    let _ = mpv.set_property("deband", "no");
+                } else {
+                    let _ = mpv.set_property("deband", "yes");
+                    let _ = mpv.set_property("scale", "spline36");
+                    let _ = mpv.set_property("cscale", "spline36");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn set_gpu_video_processing(&self, enabled: bool) -> Result<(), String> {
+        self.gpu_video_processing.store(enabled, Ordering::Relaxed);
+        println!("[Player] GPU video processing (RTX Super Resolution / True HDR) toggled: {}", enabled);
+        #[cfg(windows)]
+        if self.hwnd != 0 {
+            let guard = self.mpv.lock().unwrap();
+            if let Some(ref mpv) = *guard {
+                let state = current_display_output_state(mpv, self.hwnd as HWND);
+                apply_display_output_mode(mpv, state, enabled);
+            }
+        }
+        Ok(())
+    }
+
     pub fn stop(&self) -> Result<(), String> {
         println!("[Player] stop called");
         let guard = self.mpv.lock().unwrap();
@@ -612,6 +826,211 @@ impl MpvPlayer {
     }
 
     pub fn get_diagnostics(&self) -> PlayerDiagnostics {
-        Self::collect_diagnostics(&self.mpv, &self.recent_logs)
+        Self::collect_diagnostics(
+            &self.mpv,
+            &self.recent_logs,
+            self.gpu_video_processing.load(Ordering::Relaxed),
+            self.is_hdr_active_flag.load(Ordering::Relaxed),
+        )
+    }
+}
+
+// ── Display Output & Color Management Helpers (from stremio-shell-ng) ───────
+
+#[cfg(windows)]
+fn current_display_output_state(mpv: &Mpv, window_handle: HWND) -> DisplayOutputState {
+    DisplayOutputState {
+        mode: current_display_output_mode(window_handle),
+        scale_percent: current_video_filter_scale(mpv, window_handle),
+    }
+}
+
+#[cfg(windows)]
+fn current_display_output_mode(window_handle: HWND) -> DisplayOutputMode {
+    let monitor = unsafe { MonitorFromWindow(window_handle, MONITOR_DEFAULTTONEAREST) };
+    match monitor_hdr_active(monitor) {
+        Some(true) => DisplayOutputMode::Hdr,
+        Some(false) => DisplayOutputMode::Sdr,
+        None => DisplayOutputMode::Auto,
+    }
+}
+
+#[cfg(windows)]
+fn current_video_filter_scale(mpv: &Mpv, window_handle: HWND) -> u32 {
+    let Some(video_height) = current_video_height(mpv) else {
+        return 100;
+    };
+    let Some(display_height) = current_monitor_height(window_handle) else {
+        return 100;
+    };
+    if video_height <= 0.0 || display_height <= video_height {
+        return 100;
+    }
+
+    ((display_height / video_height).min(4.0) * 100.0).round() as u32
+}
+
+fn current_video_height(mpv: &Mpv) -> Option<f64> {
+    let video_params = mpv.get_property::<String>("video-params").ok()?;
+    let video_params = serde_json::from_str::<serde_json::Value>(&video_params).ok()?;
+    video_params.get("h").and_then(serde_json::Value::as_f64)
+}
+
+#[cfg(windows)]
+fn current_monitor_height(window_handle: HWND) -> Option<f64> {
+    let monitor = unsafe { MonitorFromWindow(window_handle, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return None;
+    }
+
+    let mut monitor_info: MONITORINFO = unsafe { std::mem::zeroed() };
+    monitor_info.cbSize = std::mem::size_of::<MONITORINFO>() as DWORD;
+    if unsafe { GetMonitorInfoW(monitor, &mut monitor_info) } == 0 {
+        return None;
+    }
+
+    Some((monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top) as f64)
+}
+
+fn apply_display_output_mode(mpv: &Mpv, state: DisplayOutputState, gpu_video_processing: bool) {
+    let vf = if gpu_video_processing {
+        let scale = state.scale_percent as f64 / 100.0;
+        let mut vf = format!("d3d11vpp=scaling-mode=nvidia:scale={scale:.2}");
+        if state.mode == DisplayOutputMode::Hdr {
+            vf.push_str(":format=x2bgr10:nvidia-true-hdr");
+        }
+        vf
+    } else {
+        String::new()
+    };
+    let color = match state.mode {
+        DisplayOutputMode::Hdr | DisplayOutputMode::Auto => [
+            ("d3d11-output-csp", "auto"),
+            ("target-colorspace-hint", "auto"),
+            ("target-trc", "auto"),
+            ("target-prim", "auto"),
+        ],
+        DisplayOutputMode::Sdr => [
+            ("d3d11-output-csp", "srgb"),
+            ("target-colorspace-hint", "yes"),
+            ("target-trc", "srgb"),
+            ("target-prim", "bt.709"),
+        ],
+    };
+
+    for (name, value) in std::iter::once(("vf", vf.as_str())).chain(color) {
+        if let Err(error) = mpv.set_property(name, value) {
+            eprintln!("mpv: cannot set {name}={value}: {error:?}");
+        }
+    }
+}
+
+#[cfg(windows)]
+fn monitor_hdr_active(monitor: HMONITOR) -> Option<bool> {
+    if monitor.is_null() {
+        return None;
+    }
+
+    let device_name = monitor_device_name(monitor)?;
+    for path in active_display_paths()? {
+        let Some(source_name) = display_source_name(&path) else {
+            continue;
+        };
+        if source_name.viewGdiDeviceName != device_name {
+            continue;
+        }
+
+        return display_hdr_active(&path);
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn monitor_device_name(monitor: HMONITOR) -> Option<[u16; 32]> {
+    let mut monitor_info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    monitor_info.cbSize = std::mem::size_of::<MONITORINFOEXW>() as DWORD;
+
+    let result =
+        unsafe { GetMonitorInfoW(monitor, &mut monitor_info as *mut _ as *mut MONITORINFO) };
+    if result == 0 {
+        None
+    } else {
+        Some(monitor_info.szDevice)
+    }
+}
+
+#[cfg(windows)]
+fn active_display_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
+    for _ in 0..3 {
+        let mut path_count = 0;
+        let mut mode_count = 0;
+        let buffer_status = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+        };
+        if buffer_status != ERROR_SUCCESS as LONG {
+            return None;
+        }
+
+        let mut paths =
+            vec![unsafe { std::mem::zeroed::<DISPLAYCONFIG_PATH_INFO>() }; path_count as usize];
+        let mut modes =
+            vec![unsafe { std::mem::zeroed::<DISPLAYCONFIG_MODE_INFO>() }; mode_count as usize];
+        let query_status = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut path_count,
+                paths.as_mut_ptr(),
+                &mut mode_count,
+                modes.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+
+        if query_status == ERROR_SUCCESS as LONG {
+            paths.truncate(path_count as usize);
+            return Some(paths);
+        }
+        if query_status != ERROR_INSUFFICIENT_BUFFER as LONG {
+            return None;
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn display_source_name(path: &DISPLAYCONFIG_PATH_INFO) -> Option<DISPLAYCONFIG_SOURCE_DEVICE_NAME> {
+    let mut source_name: DISPLAYCONFIG_SOURCE_DEVICE_NAME = unsafe { std::mem::zeroed() };
+    source_name.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+        _type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+        size: std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
+        adapterId: path.sourceInfo.adapterId,
+        id: path.sourceInfo.id,
+    };
+
+    let status = unsafe { DisplayConfigGetDeviceInfo(&mut source_name.header) };
+    if status == ERROR_SUCCESS as LONG {
+        Some(source_name)
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn display_hdr_active(path: &DISPLAYCONFIG_PATH_INFO) -> Option<bool> {
+    let mut color_info: DisplayconfigGetAdvancedColorInfo2 = unsafe { std::mem::zeroed() };
+    color_info.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+        _type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2,
+        size: std::mem::size_of::<DisplayconfigGetAdvancedColorInfo2>() as u32,
+        adapterId: path.targetInfo.adapterId,
+        id: path.targetInfo.id,
+    };
+
+    let status = unsafe { DisplayConfigGetDeviceInfo(&mut color_info.header) };
+    if status == ERROR_SUCCESS as LONG {
+        Some(color_info.active_color_mode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR)
+    } else {
+        None
     }
 }

@@ -47,6 +47,7 @@ import {
   getAutoSelectAudio,
   getAutoSelectSubtitle,
 } from '../utils/subtitleHelper';
+import { useSettings } from '../hooks/useSettings';
 
 interface PlayerDiagnostics {
   codec?: string;
@@ -60,6 +61,10 @@ interface PlayerDiagnostics {
   video_output?: string;
   mpv_version?: string;
   ffmpeg_version?: string;
+  uma_detected?: boolean;
+  gpu_video_processing_supported?: boolean;
+  gpu_video_processing_enabled?: boolean;
+  display_hdr_active?: boolean;
   recent_logs?: string[];
 }
 
@@ -90,6 +95,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   onClose,
   onSelectEpisode,
 }) => {
+  const { settings } = useSettings();
   const hudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const metadataTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -171,6 +177,19 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
     const saved = localStorage.getItem('player_auto_skip_intro');
     return saved !== null ? saved === 'true' : false;
   });
+
+  // Synchronize player optimization settings (HWDEC, Render Profile, RTX VSR) with native MPV
+  useEffect(() => {
+    if (settings.hardwareAcceleration) {
+      invoke('player_set_hwdec', { mode: settings.hardwareAcceleration }).catch(console.error);
+    }
+    if (settings.renderProfile) {
+      invoke('player_set_render_profile', { profile: settings.renderProfile }).catch(console.error);
+    }
+    if (settings.gpuVideoProcessing !== undefined) {
+      invoke('player_set_gpu_video_processing', { enabled: settings.gpuVideoProcessing }).catch(console.error);
+    }
+  }, [settings.hardwareAcceleration, settings.renderProfile, settings.gpuVideoProcessing]);
 
   // Online external subtitles
   const [onlineSubQuery, setOnlineSubQuery] = useState('');
@@ -1681,6 +1700,29 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             </span>
             <span>Video Output:</span>
             <span>{diagnosticsData.video_output || 'gpu-next (D3D11)'}</span>
+            <span>GPU Hardware:</span>
+            <span style={{ color: diagnosticsData.uma_detected ? '#f59e0b' : '#38bdf8', fontWeight: 600 }}>
+              {diagnosticsData.uma_detected ? 'Integrated GPU (UMA/Fast)' : 'Dedicated GPU (Discrete)'}
+            </span>
+            <span>Display Output:</span>
+            <span style={{ color: diagnosticsData.display_hdr_active ? '#ec4899' : '#cbd5e1', fontWeight: 600 }}>
+              {diagnosticsData.display_hdr_active ? 'HDR (High Dynamic Range)' : 'SDR (Standard Dynamic Range)'}
+            </span>
+            <span>RTX Super Res:</span>
+            <span style={{
+              color: diagnosticsData.gpu_video_processing_enabled
+                ? '#4ade80'
+                : diagnosticsData.gpu_video_processing_supported
+                ? '#38bdf8'
+                : '#64748b',
+              fontWeight: 600,
+            }}>
+              {diagnosticsData.gpu_video_processing_enabled
+                ? 'Active (D3D11 VPP AI Scaler)'
+                : diagnosticsData.gpu_video_processing_supported
+                ? 'Supported (Disabled in Settings)'
+                : 'Not Supported'}
+            </span>
             <span>MPV Core:</span>
             <span>{diagnosticsData.mpv_version || 'Embedded'}</span>
           </div>

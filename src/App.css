@@ -1261,14 +1261,17 @@ body, html, #root {
   overflow: hidden;
   background: #141126;
   position: relative;
-  transition: border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
   border: 2px solid transparent;
 }
 
 .stremio-card:hover .stremio-poster-wrap {
-  border-color: #ffffff;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.75);
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.85);
+  transform: translateY(-4px);
 }
 
 .stremio-poster-img {
@@ -1276,6 +1279,25 @@ body, html, #root {
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.stremio-card:hover .stremio-poster-img {
+  transform: scale(1.03);
+}
+
+.stremio-poster-hover-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0.55) 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 2;
+}
+
+.stremio-card:hover .stremio-poster-hover-overlay {
+  opacity: 1;
 }
 
 .stremio-card-rating {
@@ -4865,46 +4887,64 @@ body, html, #root {
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(0.88);
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: rgba(14, 13, 22, 0.46);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 2px solid rgba(255, 255, 255, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  z-index: 4;
+  z-index: 5;
   color: #ffffff;
   padding: 0;
-}
-
-.stremio-card:not(.continue-watching) .cw-center-play-btn {
+  border: none;
   opacity: 0;
   pointer-events: none;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.18s ease,
+              box-shadow 0.22s ease;
+}
+
+/* Regular catalog cards: clean solid vibrant green play button on hover (no white ring ghosting) */
+.stremio-card:not(.continue-watching) .cw-center-play-btn {
+  background: #2ebd59;
+  box-shadow: 0 6px 20px rgba(46, 189, 89, 0.45);
 }
 
 .stremio-card:not(.continue-watching):hover .cw-center-play-btn {
   opacity: 1;
   pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
 }
 
-.stremio-card:hover .cw-center-play-btn {
-  background: #2ebd59;
-  border-color: #2ebd59;
-  box-shadow: 0 6px 22px rgba(46, 189, 89, 0.5);
-  transform: translate(-50%, -50%) scale(1.08);
-}
-
-.cw-center-play-btn:hover {
+.stremio-card:not(.continue-watching) .cw-center-play-btn:hover {
   background: #27a84e !important;
-  border-color: #27a84e !important;
-  transform: translate(-50%, -50%) scale(1.14) !important;
+  box-shadow: 0 8px 26px rgba(46, 189, 89, 0.65) !important;
+  transform: translate(-50%, -50%) scale(1.1) !important;
+}
+
+/* Continue Watching cards: clean artwork in idle state, sleek frosted green on hover */
+.stremio-card.continue-watching .cw-center-play-btn {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.88);
+  background: #2ebd59;
+  border: none;
+  box-shadow: 0 6px 20px rgba(46, 189, 89, 0.45);
+}
+
+.stremio-card.continue-watching:hover .cw-center-play-btn {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.stremio-card.continue-watching .cw-center-play-btn:hover {
+  background: #27a84e !important;
+  box-shadow: 0 8px 26px rgba(46, 189, 89, 0.65) !important;
+  transform: translate(-50%, -50%) scale(1.1) !important;
 }
 
 .cw-quick-remove-btn {
@@ -4989,6 +5029,10 @@ body, html, #root {
   word-break: break-word;
   padding: 0 16px 0 16px;
   transition: color 0.15s ease;
+}
+
+.cw-card-info-row.catalog-card .cw-card-title-centered {
+  padding: 0 4px;
 }
 
 .stremio-card:hover .cw-card-title-centered {

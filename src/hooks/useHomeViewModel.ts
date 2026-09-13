@@ -13,31 +13,45 @@ export function useHomeViewModel(selectedExtension: string) {
   // Request cancellation tracker (CloudStream HomeViewModel.loadAndCancel parity)
   const currentRequestId = useRef<number>(0);
 
-  // Pre-fetch LoadResponse for hero spotlight items (CloudStream updatePreviewResponses parity)
+  // Pre-fetch LoadResponse for hero spotlight items (CloudStream updatePreviewResponses parity).
+  // Staggered (rather than all fired at once) so the burst of `invoke` calls
+  // and resulting state updates don't compete with the initial home render
+  // for the main thread / IPC right as the page first paints.
   const prefetchHeroDetails = useCallback((items: SearchResponse[]) => {
     const candidates = items.slice(0, 6);
-    for (const item of candidates) {
-      if (!item.url || !item.api_name) continue;
+    candidates.forEach((item, idx) => {
+      if (!item.url || !item.api_name) return;
 
-      setHeroDetails((prev) => {
-        if (prev[item.url]) return prev;
+      const fetchOne = () => {
+        setHeroDetails((prev) => {
+          if (prev[item.url]) return prev;
 
-        invoke<LoadResponse>('load_media', {
-          provider: item.api_name,
-          url: item.url,
-        })
-          .then((res) => {
-            if (res) {
-              setHeroDetails((d) => ({ ...d, [item.url]: res }));
-            }
+          invoke<LoadResponse>('load_media', {
+            provider: item.api_name,
+            url: item.url,
           })
-          .catch((err) => {
-            console.warn('[useHomeViewModel] prefetch error for item:', item.name, err);
-          });
+            .then((res) => {
+              if (res) {
+                setHeroDetails((d) => ({ ...d, [item.url]: res }));
+              }
+            })
+            .catch((err) => {
+              console.warn('[useHomeViewModel] prefetch error for item:', item.name, err);
+            });
 
-        return prev;
-      });
-    }
+          return prev;
+        });
+      };
+
+      // Only the first hero item is fetched immediately (it's what's visible
+      // right away); the rest are staggered so this burst of `invoke` calls
+      // doesn't compete with the initial shelf render for the main thread.
+      if (idx === 0) {
+        fetchOne();
+      } else {
+        setTimeout(fetchOne, idx * 400);
+      }
+    });
   }, []);
 
   // Load home shelves

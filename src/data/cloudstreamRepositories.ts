@@ -18,9 +18,9 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
   {
     "id": "nehal",
     "name": "Nehal's Server (BDIX & CloudStream)",
-    "icon": "🚀",
-    "iconUrl": "https://avatars.githubusercontent.com/u/81577905?s=100",
-    "iconBg": "rgba(124,58,237,0.2)",
+    "icon": "🐧",
+    "iconUrl": "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/icon.png",
+    "iconBg": "rgba(99,102,241,0.2)",
     "badge": "BDIX / Fast",
     "tags": [
       "bdix",
@@ -28,11 +28,14 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "fast",
       "english",
       "movies",
-      "series"
+      "series",
+      "anime"
     ],
     "shortcodes": [
       "nehal",
-      "bdix"
+      "bdix",
+      "nehalbdix",
+      "ns"
     ],
     "directInstall": "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json",
     "webpage": "https://github.com/nehalDIU/nehal-CloudStream",

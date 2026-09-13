@@ -656,6 +656,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "winapi",
  "zip 2.4.2",
  "zip-extract",
 ]

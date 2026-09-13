@@ -14,7 +14,7 @@ interface MediaCardProps {
   isContinueWatching?: boolean;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({
+const MediaCardComponent: React.FC<MediaCardProps> = ({
   item,
   onClick,
   onPlay,
@@ -95,6 +95,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           loading="lazy"
         />
 
+        {/* Hover Dim Overlay for clean contrast */}
+        <div className="stremio-poster-hover-overlay" />
+
         {/* Top-Left Quick Remove 'X' Button */}
         {onRemove && (
           <button
@@ -110,7 +113,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           </button>
         )}
 
-        {/* Center Play Button (frosted ring in default state, solid green on hover) */}
+        {/* Center Play Button */}
         <button
           type="button"
           className="cw-center-play-btn"
@@ -124,7 +127,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             }
           }}
         >
-          <Play size={20} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+          <Play size={20} fill="#ffffff" strokeWidth={0} style={{ marginLeft: '2px' }} />
         </button>
 
         {/* Top-Left Quality Badge */}
@@ -179,13 +182,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         )}
       </div>
 
-      {/* Card Info & Title with 3-Dots Menu */}
-      <div className="cw-card-info-row">
+      {/* Card Info & Title with 3-Dots Menu (only on Continue Watching) */}
+      <div className={`cw-card-info-row ${!isCW ? 'catalog-card' : ''}`}>
         <div className="cw-card-title-centered" title={item.name}>
           {item.name}
         </div>
 
-        {(onRemove || onPlay || isCW) && (
+        {isCW && (
           <div className={`cw-card-menu-anchor ${showMenu ? 'open' : ''}`} ref={menuRef}>
             <button
               type="button"
@@ -248,4 +251,8 @@ export const MediaCard: React.FC<MediaCardProps> = ({
     </div>
   );
 };
+
+// Memoized: prevents every card in every shelf from re-rendering whenever an
+// unrelated piece of App state changes (search input, dropdown toggles, etc).
+export const MediaCard = React.memo(MediaCardComponent);
 

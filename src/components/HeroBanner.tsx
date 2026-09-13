@@ -22,7 +22,7 @@ interface HeroBannerProps {
   currentWatchStatus?: (item: SearchResponse) => string | undefined;
 }
 
-export const HeroBanner: React.FC<HeroBannerProps> = ({
+const HeroBannerComponent: React.FC<HeroBannerProps> = ({
   items,
   loadedDetails,
   onSelectItem,
@@ -304,3 +304,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
     </div>
   );
 };
+
+// Memoized to avoid restarting/recreating the carousel's internal state work
+// on every unrelated App re-render.
+export const HeroBanner = React.memo(HeroBannerComponent);

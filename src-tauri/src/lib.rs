@@ -1,5 +1,6 @@
 pub mod database;
 pub mod engine;
+pub mod gpu_video_processing;
 pub mod models;
 pub mod player;
 pub mod plugins;
@@ -1256,6 +1257,21 @@ async fn player_set_preferred_languages(
         .set_preferred_languages(slang.as_deref(), alang.as_deref())
 }
 
+#[tauri::command]
+async fn player_set_hwdec(mode: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.player.set_hwdec(&mode)
+}
+
+#[tauri::command]
+async fn player_set_render_profile(profile: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.player.set_render_profile(&profile)
+}
+
+#[tauri::command]
+async fn player_set_gpu_video_processing(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    state.player.set_gpu_video_processing(enabled)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1389,6 +1405,9 @@ pub fn run() {
             player_add_subtitle,
             player_get_tracks,
             player_set_preferred_languages,
+            player_set_hwdec,
+            player_set_render_profile,
+            player_set_gpu_video_processing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

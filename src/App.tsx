@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Suspense, lazy } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -16,18 +16,25 @@ import {
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MediaCard } from './components/MediaCard';
-import { DetailModal } from './components/DetailModal';
-import { PlayerOverlay } from './components/PlayerOverlay';
-import { PluginsScreen } from './screens/PluginsScreen';
-import { SearchScreen } from './screens/SearchScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
 import { SearchSuggestionsDropdown } from './components/search/SearchSuggestionsDropdown';
 import { SearchFilterDropdown } from './components/search/SearchFilterDropdown';
 import { useSearchEngine } from './hooks/useSearchEngine';
 import { useHomeViewModel } from './hooks/useHomeViewModel';
-import { ExpandedShelfModal } from './components/ExpandedShelfModal';
 import { MediaShelf } from './components/MediaShelf';
 import { HeroBanner } from './components/HeroBanner';
+import { HomeShelfRow, HomeShelfSeeAllEntry } from './components/HomeShelfRow';
+import { LazyMount } from './components/LazyMount';
+
+// Code-split heavy, conditionally-rendered screens/modals so the initial
+// mainpage bundle only pays for what it actually renders on first paint.
+// (PluginsScreen + PlayerOverlay + DetailModal alone are ~7,000 lines of
+// TSX that were previously bundled and parsed up front for every load.)
+const DetailModal = lazy(() => import('./components/DetailModal').then((m) => ({ default: m.DetailModal })));
+const PlayerOverlay = lazy(() => import('./components/PlayerOverlay').then((m) => ({ default: m.PlayerOverlay })));
+const PluginsScreen = lazy(() => import('./screens/PluginsScreen').then((m) => ({ default: m.PluginsScreen })));
+const SearchScreen = lazy(() => import('./screens/SearchScreen').then((m) => ({ default: m.SearchScreen })));
+const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen })));
+const ExpandedShelfModal = lazy(() => import('./components/ExpandedShelfModal').then((m) => ({ default: m.ExpandedShelfModal })));
 import {
   Search,
   ChevronDown,
@@ -89,6 +96,86 @@ export const CLOUDSTREAM_CATEGORIES: CategoryDef[] = [
   { id: 'NSFW', label: 'NSFW', icon: ShieldAlert, types: ['NSFW'] },
   { id: 'Others', label: 'Others', icon: Folder, types: ['Other', 'Others'] },
 ];
+
+// CloudStream category matching parity — pure functions, hoisted out of the
+// component so they aren't re-created on every render.
+function itemMatchesCategory(item: SearchResponse, cat: CloudStreamCategory): boolean {
+  if (cat === 'All') return true;
+  const t = (item.tv_type || '').toLowerCase();
+  switch (cat) {
+    case 'Movies':
+      return t === 'movie' || t === 'animemovie';
+    case 'TV Series':
+      return t === 'tvseries';
+    case 'Anime':
+      return t === 'anime' || t === 'animemovie' || t === 'ova';
+    case 'Asian Dramas':
+      return t === 'asiandrama';
+    case 'Cartoons':
+      return t === 'cartoon';
+    case 'Documentaries':
+      return t === 'documentary';
+    case 'Livestreams':
+      return t === 'livestream' || t === 'live';
+    case 'Torrents':
+      return t === 'torrent';
+    case 'NSFW':
+      return t === 'nsfw';
+    case 'Others':
+      return t === 'other' || t === 'others';
+    default:
+      return true;
+  }
+}
+
+function shelfMatchesCategory(shelf: ExpandableShelf, cat: CloudStreamCategory): boolean {
+  if (cat === 'All') return true;
+  const title = shelf.list.name.toLowerCase();
+
+  // 1. Keyword matching on shelf title (exact category name from provider)
+  switch (cat) {
+    case 'Movies':
+      if (title.includes('movie') || title.includes('cinema') || title.includes('film')) return true;
+      break;
+    case 'TV Series':
+      if (title.includes('series') || title.includes('tv') || title.includes('show') || title.includes('season')) return true;
+      break;
+    case 'Anime':
+      if (title.includes('anime') || title.includes('donghua') || title.includes('manga')) return true;
+      break;
+    case 'Asian Dramas':
+      if (title.includes('asian') || title.includes('drama') || title.includes('kdrama') || title.includes('k-drama') || title.includes('cdrama') || title.includes('c-drama')) return true;
+      break;
+    case 'Cartoons':
+      if (title.includes('cartoon') || title.includes('animation') || title.includes('animated') || title.includes('kids')) return true;
+      break;
+    case 'Documentaries':
+      if (title.includes('docu')) return true;
+      break;
+    case 'Livestreams':
+      if (title.includes('live') || title.includes('stream') || title.includes('iptv') || title.includes('channel')) return true;
+      break;
+    case 'Torrents':
+      if (title.includes('torrent')) return true;
+      break;
+    case 'NSFW':
+      if (title.includes('nsfw') || title.includes('adult') || title.includes('18+') || title.includes('hentai')) return true;
+      break;
+    case 'Others':
+      if (title.includes('other')) return true;
+      break;
+  }
+
+  // 2. Check if any item in this shelf matches the category
+  return shelf.list.list.some((it: SearchResponse) => itemMatchesCategory(it, cat));
+}
+
+// Lightweight fallback shown briefly while a code-split screen chunk loads.
+const ScreenLoadingFallback: React.FC = () => (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '80px' }}>
+    <Loader2 size={28} className="animate-spin" color="var(--stremio-purple-light)" />
+  </div>
+);
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
@@ -155,6 +242,12 @@ export const App: React.FC = () => {
     actionType?: 'continue_watching' | 'watchlist' | 'provider';
     shelfName?: string;
   } | null>(null);
+
+  // Stable identity so HomeShelfRow's memoization isn't defeated by a fresh
+  // closure on every App render.
+  const handleSeeAllShelf = React.useCallback((entry: HomeShelfSeeAllEntry) => {
+    setExpandedShelf(entry);
+  }, []);
 
   // Search state powered by CloudStream Search Engine
   const searchEngine = useSearchEngine();
@@ -225,7 +318,9 @@ export const App: React.FC = () => {
   };
 
   // Load Library data (Watchlist & History)
-  const loadLibraryData = async () => {
+  // useCallback: passed down into memoized MediaCard/MediaShelf/HeroBanner
+  // trees, so a stable identity is required for React.memo to be effective.
+  const loadLibraryData = React.useCallback(async () => {
     try {
       const [wl, hist] = await Promise.all([
         invoke<WatchlistItem[]>('get_watchlist'),
@@ -236,10 +331,10 @@ export const App: React.FC = () => {
     } catch (e) {
       console.error('Failed to load library data:', e);
     }
-  };
+  }, []);
 
   // Toggle or set watchlist status for an item (CloudStream Bookmark parity)
-  const handleSetWatchlistStatus = async (media: SearchResponse, status?: string) => {
+  const handleSetWatchlistStatus = React.useCallback(async (media: SearchResponse, status?: string) => {
     try {
       const existing = watchlist.find((w) => w.media_id === media.url);
       if (!status || (existing && existing.status === status)) {
@@ -262,28 +357,30 @@ export const App: React.FC = () => {
     } catch (e) {
       console.error('Watchlist status error:', e);
     }
-  };
+  }, [watchlist, loadLibraryData]);
 
-  const isInWatchlist = (media: SearchResponse) => {
-    return watchlist.some((w) => w.media_id === media.url);
-  };
+  const isInWatchlist = React.useCallback(
+    (media: SearchResponse) => watchlist.some((w) => w.media_id === media.url),
+    [watchlist]
+  );
 
-  const getWatchlistStatus = (media: SearchResponse): string | undefined => {
-    return watchlist.find((w) => w.media_id === media.url)?.status;
-  };
+  const getWatchlistStatus = React.useCallback(
+    (media: SearchResponse): string | undefined => watchlist.find((w) => w.media_id === media.url)?.status,
+    [watchlist]
+  );
 
   // Remove single item from Continue Watching (CloudStream removeLastWatched parity)
-  const handleRemoveHistoryItem = async (media: SearchResponse) => {
+  const handleRemoveHistoryItem = React.useCallback(async (media: SearchResponse) => {
     try {
       await invoke('remove_watch_history_item', { mediaId: media.url });
       await loadLibraryData();
     } catch (e) {
       console.error('Failed to remove history item:', e);
     }
-  };
+  }, [loadLibraryData]);
 
   // Quick Direct Play (Resume playback or play Ep 1 without modal)
-  const handleQuickPlay = async (media: SearchResponse) => {
+  const handleQuickPlay = React.useCallback(async (media: SearchResponse) => {
     try {
       const details: any = await invoke('load_media_details', {
         provider: media.api_name,
@@ -330,7 +427,7 @@ export const App: React.FC = () => {
       console.error('Quick play fallback to details modal:', e);
       setSelectedItem(media);
     }
-  };
+  }, [history]);
 
   // Random Media Picker (CloudStream home_random parity)
   const handlePickRandomItem = () => {
@@ -542,7 +639,7 @@ export const App: React.FC = () => {
   }, [activeTab]);
 
   // Continue Watching items computed from history
-  const continueWatchingItems: SearchResponse[] = history
+  const continueWatchingItems: SearchResponse[] = React.useMemo(() => history
     .filter((h) => !h.is_completed && h.position_ms > 10000)
     .map((h) => ({
       name: h.title,
@@ -555,41 +652,54 @@ export const App: React.FC = () => {
       season: h.tv_type === 'Movie' ? undefined : (h.season_num ?? undefined),
       episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
       latest_episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
-    }));
+    })), [history]);
 
-  const historyProgressMap: Record<string, number> = {};
-  history.forEach((h) => {
-    if (h.duration_ms > 0) {
-      historyProgressMap[h.media_id] = (h.position_ms / h.duration_ms) * 100;
-    }
-  });
+  const historyProgressMap: Record<string, number> = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    history.forEach((h) => {
+      if (h.duration_ms > 0) {
+        map[h.media_id] = (h.position_ms / h.duration_ms) * 100;
+      }
+    });
+    return map;
+  }, [history]);
 
   // Filtered Bookmarks on Home
-  const filteredBookmarks = watchlist.filter((w) => {
-    if (bookmarkFilter === 'all') return true;
-    return w.status === bookmarkFilter;
-  });
+  const filteredBookmarks = React.useMemo(
+    () => watchlist.filter((w) => bookmarkFilter === 'all' || w.status === bookmarkFilter),
+    [watchlist, bookmarkFilter]
+  );
 
-  const bookmarkSearchItems: SearchResponse[] = filteredBookmarks.map((w) => ({
-    name: w.title,
-    url: w.media_id,
-    api_name: w.provider_id,
-    tv_type: (w.tv_type as any) || 'Movie',
-    poster_url: w.poster_url,
-    score: w.score,
-  }));
+  const bookmarkSearchItems: SearchResponse[] = React.useMemo(
+    () =>
+      filteredBookmarks.map((w) => ({
+        name: w.title,
+        url: w.media_id,
+        api_name: w.provider_id,
+        tv_type: (w.tv_type as any) || 'Movie',
+        poster_url: w.poster_url,
+        score: w.score,
+      })),
+    [filteredBookmarks]
+  );
 
   // Watch status counts for chips
-  const statusCounts = {
-    watching: watchlist.filter((w) => w.status === 'watching').length,
-    plan_to_watch: watchlist.filter((w) => w.status === 'plan_to_watch').length,
-    completed: watchlist.filter((w) => w.status === 'completed').length,
-    on_hold: watchlist.filter((w) => w.status === 'on_hold').length,
-    dropped: watchlist.filter((w) => w.status === 'dropped').length,
-  };
+  const statusCounts = React.useMemo(
+    () => ({
+      watching: watchlist.filter((w) => w.status === 'watching').length,
+      plan_to_watch: watchlist.filter((w) => w.status === 'plan_to_watch').length,
+      completed: watchlist.filter((w) => w.status === 'completed').length,
+      on_hold: watchlist.filter((w) => w.status === 'on_hold').length,
+      dropped: watchlist.filter((w) => w.status === 'dropped').length,
+    }),
+    [watchlist]
+  );
 
   // Provider Shelves (ExpandableShelf parity)
-  const filteredShelves = shelves.filter((s) => s.list.name !== 'Continue Watching');
+  const filteredShelves = React.useMemo(
+    () => shelves.filter((s) => s.list.name !== 'Continue Watching'),
+    [shelves]
+  );
 
   // Stremio Hero Spotlight items
   const heroBannerItems = React.useMemo(() => {
@@ -606,83 +716,26 @@ export const App: React.FC = () => {
     return items;
   }, [shelves]);
 
-  // CloudStream category matching parity
-  const itemMatchesCategory = (item: SearchResponse, cat: CloudStreamCategory): boolean => {
-    if (cat === 'All') return true;
-    const t = (item.tv_type || '').toLowerCase();
-    switch (cat) {
-      case 'Movies':
-        return t === 'movie' || t === 'animemovie';
-      case 'TV Series':
-        return t === 'tvseries';
-      case 'Anime':
-        return t === 'anime' || t === 'animemovie' || t === 'ova';
-      case 'Asian Dramas':
-        return t === 'asiandrama';
-      case 'Cartoons':
-        return t === 'cartoon';
-      case 'Documentaries':
-        return t === 'documentary';
-      case 'Livestreams':
-        return t === 'livestream' || t === 'live';
-      case 'Torrents':
-        return t === 'torrent';
-      case 'NSFW':
-        return t === 'nsfw';
-      case 'Others':
-        return t === 'other' || t === 'others';
-      default:
-        return true;
-    }
-  };
-
-  const shelfMatchesCategory = (shelf: ExpandableShelf, cat: CloudStreamCategory): boolean => {
-    if (cat === 'All') return true;
-    const title = shelf.list.name.toLowerCase();
-
-    // 1. Keyword matching on shelf title (exact category name from provider)
-    switch (cat) {
-      case 'Movies':
-        if (title.includes('movie') || title.includes('cinema') || title.includes('film')) return true;
-        break;
-      case 'TV Series':
-        if (title.includes('series') || title.includes('tv') || title.includes('show') || title.includes('season')) return true;
-        break;
-      case 'Anime':
-        if (title.includes('anime') || title.includes('donghua') || title.includes('manga')) return true;
-        break;
-      case 'Asian Dramas':
-        if (title.includes('asian') || title.includes('drama') || title.includes('kdrama') || title.includes('k-drama') || title.includes('cdrama') || title.includes('c-drama')) return true;
-        break;
-      case 'Cartoons':
-        if (title.includes('cartoon') || title.includes('animation') || title.includes('animated') || title.includes('kids')) return true;
-        break;
-      case 'Documentaries':
-        if (title.includes('docu')) return true;
-        break;
-      case 'Livestreams':
-        if (title.includes('live') || title.includes('stream') || title.includes('iptv') || title.includes('channel')) return true;
-        break;
-      case 'Torrents':
-        if (title.includes('torrent')) return true;
-        break;
-      case 'NSFW':
-        if (title.includes('nsfw') || title.includes('adult') || title.includes('18+') || title.includes('hentai')) return true;
-        break;
-      case 'Others':
-        if (title.includes('other')) return true;
-        break;
-    }
-
-    // 2. Check if any item in this shelf matches the category
-    return shelf.list.list.some((it: SearchResponse) => itemMatchesCategory(it, cat));
-  };
-
-  // Filter shelves based on board category — also drop empty shelves (no cards = no header)
-  const visibleShelves = filteredShelves.filter((shelf) => {
-    if (!shelf.list.list || shelf.list.list.length === 0) return false; // hide empty shelves
-    return shelfMatchesCategory(shelf, boardCategory);
-  });
+  // Filter shelves based on board category — also drop empty shelves (no cards = no header).
+  // Also pre-compute the per-shelf display title + filtered items here so the
+  // JSX below can simply map over ready-to-render data instead of re-running
+  // the category filter (twice, previously) on every render.
+  const renderedShelves = React.useMemo(() => {
+    return filteredShelves
+      .filter((shelf) => shelf.list.list && shelf.list.list.length > 0)
+      .filter((shelf) => shelfMatchesCategory(shelf, boardCategory))
+      .map((shelf) => {
+        const categoryFiltered =
+          boardCategory === 'All'
+            ? shelf.list.list
+            : shelf.list.list.filter((it) => itemMatchesCategory(it, boardCategory));
+        return {
+          shelf,
+          displayTitle: shelf.list.name,
+          shelfItems: categoryFiltered.length > 0 ? categoryFiltered : shelf.list.list,
+        };
+      });
+  }, [filteredShelves, boardCategory]);
 
   // CloudStream valid categories:
   // Dynamically compute valid categories matching installed providers or active shelves
@@ -781,19 +834,21 @@ export const App: React.FC = () => {
 
   if (playerState) {
     return (
-      <PlayerOverlay
-        item={playerState.item}
-        episode={playerState.episode}
-        links={playerState.links}
-        allEpisodes={playerState.allEpisodes}
-        mediaDetails={playerState.mediaDetails}
-        startTime={playerState.startTime}
-        onClose={() => {
-          invoke('player_stop').catch(() => {});
-          setPlayerState(null);
-          loadLibraryData();
-        }}
-      />
+      <Suspense fallback={null}>
+        <PlayerOverlay
+          item={playerState.item}
+          episode={playerState.episode}
+          links={playerState.links}
+          allEpisodes={playerState.allEpisodes}
+          mediaDetails={playerState.mediaDetails}
+          startTime={playerState.startTime}
+          onClose={() => {
+            invoke('player_stop').catch(() => {});
+            setPlayerState(null);
+            loadLibraryData();
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -1435,37 +1490,22 @@ export const App: React.FC = () => {
                     )}
 
                     {/* 3. Provider Shelves (CloudStream HomePageList category shelves) */}
-                    {visibleShelves.map((shelf) => {
-                      const displayTitle = shelf.list.name;
-                      const shelfItems =
-                        boardCategory === 'All'
-                          ? shelf.list.list
-                          : shelf.list.list.filter((it) => itemMatchesCategory(it, boardCategory)).length > 0
-                          ? shelf.list.list.filter((it) => itemMatchesCategory(it, boardCategory))
-                          : shelf.list.list;
-
-                      return (
-                        <MediaShelf
-                          key={shelf.list.name}
-                          title={displayTitle}
-                          isHorizontal={shelf.list.is_horizontal}
-                          items={shelfItems}
-                          hasNext={shelf.has_next}
+                    {/* Lazy-mounted: shelves below the fold don't pay their DOM/image
+                        cost until they're about to scroll into view. */}
+                    {renderedShelves.map(({ shelf, displayTitle, shelfItems }) => (
+                      <LazyMount key={shelf.list.name}>
+                        <HomeShelfRow
+                          shelf={shelf}
+                          displayTitle={displayTitle}
+                          shelfItems={shelfItems}
                           isLoadingMore={expandingShelf && expandedShelf?.shelfName === shelf.list.name}
-                          onLoadMore={() => expandShelf(shelf.list.name)}
                           onSelectItem={setSelectedItem}
                           onPlayItem={handleQuickPlay}
-                          onSeeAll={() =>
-                            setExpandedShelf({
-                              title: displayTitle,
-                              items: shelf.list.list,
-                              actionType: 'provider',
-                              shelfName: shelf.list.name,
-                            })
-                          }
+                          onExpandShelf={expandShelf}
+                          onSeeAllShelf={handleSeeAllShelf}
                         />
-                      );
-                    })}
+                      </LazyMount>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1510,11 +1550,13 @@ export const App: React.FC = () => {
 
           {/* SEARCH SCREEN (CloudStream Dual-Mode Search Engine) */}
           {activeTab === 'search' && (
-            <SearchScreen
-              searchEngine={searchEngine}
-              extensions={extensions}
-              onSelectItem={setSelectedItem}
-            />
+            <Suspense fallback={<ScreenLoadingFallback />}>
+              <SearchScreen
+                searchEngine={searchEngine}
+                extensions={extensions}
+                onSelectItem={setSelectedItem}
+              />
+            </Suspense>
           )}
 
           {/* LIBRARY SCREEN */}
@@ -1596,51 +1638,59 @@ export const App: React.FC = () => {
 
           {/* PLUGINS / EXTENSION MANAGER SCREEN */}
           {activeTab === 'plugins' && (
-            <PluginsScreen
-              onExtensionsChanged={() => {
-                // Give the engine 2s to fully process /reload before re-fetching
-                // extensions and home — otherwise newly installed .cs3 plugins
-                // won't appear in the provider list yet.
-                setTimeout(async () => {
-                  await loadExtensions();
-                  await loadHome();
-                }, 2000);
-              }}
-              onSelectExtension={(name) => {
-                setActiveTab('home');
-                handleSelectExtension(name);
-              }}
-            />
+            <Suspense fallback={<ScreenLoadingFallback />}>
+              <PluginsScreen
+                onExtensionsChanged={() => {
+                  // Give the engine 2s to fully process /reload before re-fetching
+                  // extensions and home — otherwise newly installed .cs3 plugins
+                  // won't appear in the provider list yet.
+                  setTimeout(async () => {
+                    await loadExtensions();
+                    await loadHome();
+                  }, 2000);
+                }}
+                onSelectExtension={(name) => {
+                  setActiveTab('home');
+                  handleSelectExtension(name);
+                }}
+              />
+            </Suspense>
           )}
 
           {/* SETTINGS SCREEN */}
-          {activeTab === 'settings' && <SettingsScreen />}
+          {activeTab === 'settings' && (
+            <Suspense fallback={<ScreenLoadingFallback />}>
+              <SettingsScreen />
+            </Suspense>
+          )}
         </main>
       </div>
 
       {/* Media Detail Modal */}
       {selectedItem && (
-        <DetailModal
-          item={selectedItem}
-          onClose={() => {
-            setSelectedItem(null);
-            loadLibraryData();
-          }}
-          onPlay={(
-            item: SearchResponse,
-            episode: Episode,
-            links: ExtractorLink[],
-            allEpisodes?: Episode[],
-            mediaDetails?: LoadResponse,
-            startTime?: number
-          ) => {
-            setSelectedItem(null);
-            setPlayerState({ item, episode, links, allEpisodes, mediaDetails, startTime });
-          }}
-          onSelectItem={(newItem: SearchResponse) => {
-            setSelectedItem(newItem);
-          }}
-        />
+        <Suspense fallback={null}>
+          <DetailModal
+            item={selectedItem}
+            onClose={() => {
+              setSelectedItem(null);
+              loadLibraryData();
+            }}
+            onPlay={(
+              item: SearchResponse,
+              episode: Episode,
+              links: ExtractorLink[],
+              allEpisodes?: Episode[],
+              mediaDetails?: LoadResponse,
+              startTime?: number
+            ) => {
+              setSelectedItem(null);
+              setPlayerState({ item, episode, links, allEpisodes, mediaDetails, startTime });
+            }}
+            onSelectItem={(newItem: SearchResponse) => {
+              setSelectedItem(newItem);
+            }}
+          />
+        </Suspense>
       )}
 
 
@@ -1656,28 +1706,30 @@ export const App: React.FC = () => {
         const hasNext = matchingShelf ? matchingShelf.has_next : false;
 
         return (
-          <ExpandedShelfModal
-            title={expandedShelf.title}
-            items={currentItems}
-            actionType={expandedShelf.actionType}
-            progressMap={historyProgressMap}
-            hasNext={hasNext}
-            isLoadingMore={expandingShelf}
-            onLoadMore={
-              matchingShelf
-                ? () => expandShelf(matchingShelf.list.name)
-                : undefined
-            }
-            onClearHistory={handleClearHistory}
-            onClose={() => setExpandedShelf(null)}
-            onSelectItem={setSelectedItem}
-            onPlayItem={handleQuickPlay}
-            onRemoveItem={
-              expandedShelf.actionType === 'continue_watching'
-                ? handleRemoveHistoryItem
-                : undefined
-            }
-          />
+          <Suspense fallback={null}>
+            <ExpandedShelfModal
+              title={expandedShelf.title}
+              items={currentItems}
+              actionType={expandedShelf.actionType}
+              progressMap={historyProgressMap}
+              hasNext={hasNext}
+              isLoadingMore={expandingShelf}
+              onLoadMore={
+                matchingShelf
+                  ? () => expandShelf(matchingShelf.list.name)
+                  : undefined
+              }
+              onClearHistory={handleClearHistory}
+              onClose={() => setExpandedShelf(null)}
+              onSelectItem={setSelectedItem}
+              onPlayItem={handleQuickPlay}
+              onRemoveItem={
+                expandedShelf.actionType === 'continue_watching'
+                  ? handleRemoveHistoryItem
+                  : undefined
+              }
+            />
+          </Suspense>
         );
       })()}
     </div>

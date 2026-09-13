@@ -1,4 +1,5 @@
 import React from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useSettings } from '../../../hooks/useSettings';
 import { Check } from 'lucide-react';
 
@@ -92,12 +93,61 @@ export const PlayerTab: React.FC = () => {
         <select
           className="stremio-select"
           value={settings.hardwareAcceleration}
-          onChange={(e) => updateSetting('hardwareAcceleration', e.target.value as any)}
+          onChange={(e) => {
+            const val = e.target.value as any;
+            updateSetting('hardwareAcceleration', val);
+            invoke('player_set_hwdec', { mode: val }).catch(console.error);
+          }}
         >
           <option value="auto">Automatic (Recommended)</option>
           <option value="hardware">Strict Hardware (GPU)</option>
           <option value="software">Software (CPU Multi-threaded)</option>
         </select>
+      </div>
+
+      {/* Rendering & Scaler Profile (from stremio-shell-ng) */}
+      <div className="stremio-setting-row">
+        <div className="stremio-setting-label-col">
+          <span className="stremio-setting-label">Rendering & Scaler Profile</span>
+          <span className="stremio-setting-subtext">
+            Adaptive profile: Fast on Integrated GPUs (UMA) to avoid desync, Spline36 + Deband on Dedicated GPUs
+          </span>
+        </div>
+        <select
+          className="stremio-select"
+          value={settings.renderProfile || 'auto'}
+          onChange={(e) => {
+            const val = e.target.value as any;
+            updateSetting('renderProfile', val);
+            invoke('player_set_render_profile', { profile: val }).catch(console.error);
+          }}
+        >
+          <option value="auto">Automatic (Smart GPU Detection)</option>
+          <option value="fast">Fast (Integrated GPU / Low Power / Zero Desync)</option>
+          <option value="high_quality">High Quality (Spline36 + Deband / Dedicated GPU)</option>
+        </select>
+      </div>
+
+      {/* NVIDIA RTX Video Super Resolution & True HDR (from stremio-shell-ng) */}
+      <div className="stremio-setting-row">
+        <div className="stremio-setting-label-col">
+          <span className="stremio-setting-label">NVIDIA RTX Video Super Resolution & True HDR</span>
+          <span className="stremio-setting-subtext">
+            AI-based D3D11 video upscaling and HDR expansion (requires NVIDIA RTX 30/40/50 series GPU)
+          </span>
+        </div>
+        <label className="stremio-switch">
+          <input
+            type="checkbox"
+            checked={!!settings.gpuVideoProcessing}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              updateSetting('gpuVideoProcessing', enabled);
+              invoke('player_set_gpu_video_processing', { enabled }).catch(console.error);
+            }}
+          />
+          <span className="stremio-switch-slider" />
+        </label>
       </div>
 
       {/* Player Title Length Limit */}
