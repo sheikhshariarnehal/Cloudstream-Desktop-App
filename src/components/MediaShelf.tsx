@@ -16,6 +16,7 @@ interface MediaShelfProps {
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
   isHorizontal?: boolean;
+  iconUrl?: string;
 }
 
 export const MediaShelf: React.FC<MediaShelfProps> = ({
@@ -31,6 +32,7 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
   isLoadingMore,
   onLoadMore,
   isHorizontal = false,
+  iconUrl,
 }) => {
   const rowRef = useRef<HTMLDivElement>(null);
 
@@ -55,6 +57,16 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
           tabIndex={onSeeAll ? 0 : undefined}
           title={onSeeAll ? `View all from ${title}` : undefined}
         >
+          {iconUrl ? (
+            <img
+              src={iconUrl}
+              alt=""
+              className="media-shelf-icon"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+              }}
+            />
+          ) : null}
           <h2 className="media-shelf-title">{title}</h2>
           {subactions}
         </div>

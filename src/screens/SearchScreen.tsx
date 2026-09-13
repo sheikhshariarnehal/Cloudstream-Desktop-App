@@ -74,9 +74,16 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                 Results for <span className="search-query-highlight">"{lastSearchedQuery}"</span>
               </h1>
               <div className="search-stats-sub">
-                {searching
-                  ? `Streaming results (${searchProgress.completed}/${searchProgress.total || extensions.length} extensions)...`
-                  : `Found ${totalFound} title${totalFound === 1 ? '' : 's'} across ${groupedResults.length} provider${groupedResults.length === 1 ? '' : 's'}`}
+                {searching ? (
+                  <span className="search-stats-streaming">
+                    <span className="live-pulse-dot" />
+                    <span>Streaming results ({searchProgress.completed}/{searchProgress.total || extensions.length} extensions)...</span>
+                  </span>
+                ) : (
+                  <span className="search-stats-complete">
+                    <span>Found <strong style={{ color: '#f1f5f9' }}>{totalFound}</strong> title{totalFound === 1 ? '' : 's'} across <strong style={{ color: '#f1f5f9' }}>{groupedResults.length}</strong> provider{groupedResults.length === 1 ? '' : 's'}</span>
+                  </span>
+                )}
               </div>
             </div>
           ) : (
@@ -99,7 +106,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                 onClick={() => setViewMode('grouped')}
                 title="Grouped by Provider (Shelves)"
               >
-                <Rows size={15} />
+                <Rows size={17} />
                 <span>Shelves</span>
               </button>
               <button
@@ -108,7 +115,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                 onClick={() => setViewMode('grid')}
                 title="Unified Round-Robin Grid"
               >
-                <LayoutGrid size={15} />
+                <LayoutGrid size={17} />
                 <span>Grid</span>
               </button>
             </div>
@@ -156,10 +163,12 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       ) : !hasSearched || (!searchQuery && totalFound === 0) ? (
         /* Empty / Idle State */
         <div className="search-idle-empty-state">
-          <Search size={40} color="#4b4764" style={{ margin: '0 auto 12px' }} />
+          <div className="search-welcome-icon">
+            <Search size={32} color="var(--stremio-purple-light)" />
+          </div>
           <h3 className="search-idle-title">Search & Explore Media</h3>
           <p className="search-idle-sub">
-            Type any movie, series, or anime in the search bar above
+            Type any movie, series, or anime in the search bar above to query all active providers
           </p>
         </div>
       ) : totalFound === 0 ? (
@@ -190,21 +199,25 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       ) : viewMode === 'grouped' ? (
         /* Grouped Mode (Shelves per Provider) - Progressive live render as each provider returns */
         <div className="search-grouped-container">
-          {groupedResults.map((group) => (
-            <div key={group.provider} className="search-provider-shelf-wrap">
-              <MediaShelf
-                title={group.provider}
-                items={group.items}
-                onSelectItem={onSelectItem}
-                onSeeAll={() =>
-                  setExpandedShelf({
-                    title: `${group.provider} Results`,
-                    items: group.items,
-                  })
-                }
-              />
-            </div>
-          ))}
+          {groupedResults.map((group) => {
+            const matchingExt = extensions.find((e) => e.name === group.provider);
+            return (
+              <div key={group.provider} className="search-provider-shelf-wrap">
+                <MediaShelf
+                  title={group.provider}
+                  iconUrl={matchingExt?.icon_url}
+                  items={group.items}
+                  onSelectItem={onSelectItem}
+                  onSeeAll={() =>
+                    setExpandedShelf({
+                      title: `${group.provider} Results`,
+                      items: group.items,
+                    })
+                  }
+                />
+              </div>
+            );
+          })}
         </div>
       ) : (
         /* Grid Mode (Unified Round-Robin Interleaved Grid) - Live stream render */

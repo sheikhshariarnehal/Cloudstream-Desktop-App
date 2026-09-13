@@ -36,7 +36,6 @@ import {
   Plus,
   Download,
   Film,
-  Calendar,
   Folder,
   RefreshCw,
   Trash2,
@@ -1575,35 +1574,6 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* CALENDAR SCREEN */}
-          {activeTab === 'calendar' && (
-            <div style={{ padding: '36px 40px 60px' }}>
-              <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Calendar size={24} color="var(--stremio-purple-light)" />
-                Release Calendar & Upcoming Episodes
-              </h1>
-              <p style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '28px' }}>
-                Track newly released domestic BDIX episodes, series updates, and theater releases.
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                {catalog
-                  .filter((s) => s.name.toLowerCase().includes('series') || s.name.toLowerCase().includes('anime'))
-                  .map((shelf) => (
-                    <div key={shelf.name} className="stremio-shelf">
-                      <h2 className="stremio-shelf-title" style={{ marginBottom: '14px' }}>
-                        {shelf.name}
-                      </h2>
-                      <div className="stremio-shelf-grid">
-                        {shelf.list.slice(0, 7).map((media) => (
-                          <MediaCard key={media.url} item={media} onClick={setSelectedItem} />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
 
           {/* PLUGINS / EXTENSION MANAGER SCREEN */}
           {activeTab === 'plugins' && (

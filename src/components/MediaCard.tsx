@@ -104,7 +104,21 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         {qualityBadge && <div className="media-badge-hd">{qualityBadge}</div>}
 
         {/* Dub/Sub Badge */}
-        {dubLabel && <div className="media-badge-dub">{dubLabel}</div>}
+        {dubLabel && (
+          <div
+            className={`media-badge-dub ${
+              item.dub_status === 'Both'
+                ? 'both'
+                : item.dub_status === 'Dubbed'
+                ? 'dubbed'
+                : item.dub_status === 'Subbed'
+                ? 'subbed'
+                : ''
+            }`}
+          >
+            {dubLabel}
+          </div>
+        )}
 
         {/* Top-Right Score Badge with CloudStream Colors */}
         {item.score !== undefined && item.score > 0 && (
