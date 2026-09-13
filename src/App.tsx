@@ -20,6 +20,7 @@ import { DetailModal } from './components/DetailModal';
 import { PlayerOverlay } from './components/PlayerOverlay';
 import { PluginsScreen } from './screens/PluginsScreen';
 import { SearchScreen } from './screens/SearchScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { SearchSuggestionsDropdown } from './components/search/SearchSuggestionsDropdown';
 import { SearchFilterDropdown } from './components/search/SearchFilterDropdown';
 import { useSearchEngine } from './hooks/useSearchEngine';
@@ -1595,33 +1596,7 @@ export const App: React.FC = () => {
           )}
 
           {/* SETTINGS SCREEN */}
-          {activeTab === 'settings' && (
-            <div style={{ padding: '40px 60px', maxWidth: '800px', margin: '0 auto' }}>
-              <h1 style={{ fontSize: '28px', fontWeight: 800, color: '#fff', marginBottom: '24px' }}>
-                Settings
-              </h1>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ background: 'var(--stremio-surface)', padding: '20px 24px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', marginBottom: '6px' }}>
-                    Playback & Domestic Gigabit BDIX Proxy
-                  </h3>
-                  <p style={{ fontSize: '13px', color: '#94a3b8', lineHeight: '1.5' }}>
-                    Embedded local Rust stream proxy rewriting m3u8 playlists, bypassing IP restrictions and domestic bandwidth throttling.
-                  </p>
-                </div>
-
-                <div style={{ background: 'var(--stremio-surface)', padding: '20px 24px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', marginBottom: '6px' }}>
-                    Active Repository
-                  </h3>
-                  <p style={{ fontSize: '13px', color: 'var(--text-link)', fontFamily: 'monospace' }}>
-                    https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+          {activeTab === 'settings' && <SettingsScreen />}
         </main>
       </div>
 

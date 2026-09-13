@@ -4,8 +4,6 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    tauri_build::build();
-
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_path = Path::new(&manifest_dir);
     let lib_dir = manifest_path.join("libmpv");
@@ -18,6 +16,14 @@ fn main() {
             let _ = zip_extract::extract(Cursor::new(archive), &lib_dir, true);
         }
     }
+
+    // Ensure libmpv-2.dll exists at manifest root for bundle packaging
+    let root_dll = manifest_path.join("libmpv-2.dll");
+    if dll_path.exists() && !root_dll.exists() {
+        let _ = fs::copy(&dll_path, &root_dll);
+    }
+
+    tauri_build::build();
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-arg=/LIBPATH:{}", lib_dir.display());

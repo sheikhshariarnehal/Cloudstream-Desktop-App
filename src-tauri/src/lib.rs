@@ -1159,6 +1159,9 @@ pub fn run() {
             let subtitle_manager = Arc::new(SubtitleManager::new());
 
             let main_window = app.get_webview_window("main").expect("main window not found");
+            if let Some(icon) = app.default_window_icon() {
+                let _ = main_window.set_icon(icon.clone());
+            }
             #[cfg(windows)]
             let hwnd = match main_window.hwnd() {
                 Ok(h) => {
