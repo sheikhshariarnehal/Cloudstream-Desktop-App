@@ -100,6 +100,10 @@ impl MpvPlayer {
             let _ = init.set_property("title", "CloudStream Desktop");
             let _ = init.set_property("audio-client-name", "CloudStream");
             let _ = init.set_property("terminal", "yes");
+            let _ = init.set_property("idle", "yes");
+            let _ = init.set_property("force-window", "yes");
+            let _ = init.set_property("background-color", "#000000");
+            let _ = init.set_property("alpha", "no");
             let _ = init.set_property("keepaspect", "yes");
             let _ = init.set_property("vo", "gpu-next,gpu,");
             let _ = init.set_property("gpu-context", "d3d11");
@@ -409,10 +413,22 @@ impl MpvPlayer {
         url: &str,
         title: Option<&str>,
         headers: Option<HashMap<String, String>>,
+        start_time: Option<f64>,
     ) -> Result<(), String> {
-        println!("[Player] load called with URL: '{}', title: '{:?}'", url, title);
+        println!("[Player] load called with URL: '{}', title: '{:?}', start_time: '{:?}'", url, title, start_time);
         let guard = self.mpv.lock().unwrap();
         let mpv = guard.as_ref().ok_or("MPV not initialized")?;
+
+        if let Some(st) = start_time {
+            if st > 2.0 {
+                println!("[Player] Setting start time to: {:.2}s", st);
+                let _ = mpv.set_property("start", format!("{:.2}", st).as_str());
+            } else {
+                let _ = mpv.set_property("start", "none");
+            }
+        } else {
+            let _ = mpv.set_property("start", "none");
+        }
 
         if let Some(ref h_map) = headers {
             if let Some(ua) = h_map.get("User-Agent").or_else(|| h_map.get("user-agent")) {

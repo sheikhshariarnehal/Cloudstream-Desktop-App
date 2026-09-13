@@ -1031,9 +1031,10 @@ async fn player_load(
     url: String,
     title: Option<String>,
     headers: Option<std::collections::HashMap<String, String>>,
+    start_time: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.player.load(&url, title.as_deref(), headers)
+    state.player.load(&url, title.as_deref(), headers, start_time)
 }
 
 #[tauri::command]

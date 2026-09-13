@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { SearchResponse } from '../types';
-import { Play, X, Star } from 'lucide-react';
+import { Play, X, Star, MoreVertical, Trash2, Info } from 'lucide-react';
 
 interface MediaCardProps {
   item: SearchResponse;
@@ -11,6 +11,7 @@ interface MediaCardProps {
   subtitle?: string;
   showProvider?: boolean;
   isHorizontal?: boolean;
+  isContinueWatching?: boolean;
 }
 
 export const MediaCard: React.FC<MediaCardProps> = ({
@@ -22,7 +23,29 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   subtitle,
   showProvider = false,
   isHorizontal = false,
+  isContinueWatching,
 }) => {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMenu]);
+
+  // Determine if this is treated as a Continue Watching item
+  const isCW = Boolean(
+    isContinueWatching ||
+    (progressPercent !== undefined && progressPercent > 0) ||
+    onRemove
+  );
+
   // Quality badge text (only when explicitly provided by provider)
   const qualityBadge = item.quality;
 
@@ -57,7 +80,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       : '#3bb33b';
 
   return (
-    <div className={`stremio-card ${isHorizontal ? 'horizontal' : ''}`} onClick={() => onClick(item)}>
+    <div
+      className={`stremio-card ${isHorizontal ? 'horizontal' : ''} ${isCW ? 'continue-watching' : ''}`}
+      onClick={() => onClick(item)}
+    >
       <div className="stremio-poster-wrap">
         <img
           className="stremio-poster-img"
@@ -69,39 +95,40 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           loading="lazy"
         />
 
-        {/* Hover Quick Actions Overlay */}
-        <div className="card-hover-actions">
-          {onPlay && (
-            <button
-              type="button"
-              className="card-quick-play-btn"
-              title="Play Now"
-              onClick={(e) => {
-                e.stopPropagation();
-                onPlay(item, e);
-              }}
-            >
-              <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
-            </button>
-          )}
+        {/* Top-Left Quick Remove 'X' Button */}
+        {onRemove && (
+          <button
+            type="button"
+            className="cw-quick-remove-btn"
+            title="Remove from Continue Watching"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(item, e);
+            }}
+          >
+            <X size={14} color="#ffffff" strokeWidth={2.5} />
+          </button>
+        )}
 
-          {onRemove && (
-            <button
-              type="button"
-              className="card-quick-remove-btn"
-              title="Remove from history"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove(item, e);
-              }}
-            >
-              <X size={14} color="#ffffff" />
-            </button>
-          )}
-        </div>
+        {/* Center Play Button (frosted ring in default state, solid green on hover) */}
+        <button
+          type="button"
+          className="cw-center-play-btn"
+          title="Play Now"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onPlay) {
+              onPlay(item, e);
+            } else {
+              onClick(item);
+            }
+          }}
+        >
+          <Play size={20} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+        </button>
 
         {/* Top-Left Quality Badge */}
-        {qualityBadge && <div className="media-badge-hd">{qualityBadge}</div>}
+        {qualityBadge && !onRemove && <div className="media-badge-hd">{qualityBadge}</div>}
 
         {/* Dub/Sub Badge */}
         {dubLabel && (
@@ -137,24 +164,84 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         )}
 
         {/* Episode Badge (for TV Series / Continue Watching) */}
-        {episodeLabel && (
+        {episodeLabel && !progressPercent && (
           <div className="stremio-badge-episode">{episodeLabel}</div>
         )}
 
-        {/* Watch Progress Bar (if in progress) */}
+        {/* Floating Inset Progress Bar */}
         {progressPercent !== undefined && progressPercent > 0 && (
-          <div className="stremio-progress-bar">
+          <div className="cw-progress-bar-container">
             <div
-              className="stremio-progress-fill"
-              style={{ width: `${Math.min(Math.max(progressPercent, 5), 100)}%` }}
+              className="cw-progress-fill"
+              style={{ width: `${Math.min(Math.max(progressPercent, 4), 100)}%` }}
             />
           </div>
         )}
       </div>
 
-      {/* Centered Title */}
-      <div className="stremio-card-title-centered" title={item.name}>
-        {item.name}
+      {/* Card Info & Title with 3-Dots Menu */}
+      <div className="cw-card-info-row">
+        <div className="cw-card-title-centered" title={item.name}>
+          {item.name}
+        </div>
+
+        {(onRemove || onPlay || isCW) && (
+          <div className={`cw-card-menu-anchor ${showMenu ? 'open' : ''}`} ref={menuRef}>
+            <button
+              type="button"
+              className="cw-card-more-btn"
+              title="More options"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu((prev) => !prev);
+              }}
+            >
+              <MoreVertical size={15} />
+            </button>
+
+            {showMenu && (
+              <div className="cw-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                {onPlay && (
+                  <button
+                    type="button"
+                    className="cw-dropdown-item"
+                    onClick={(e) => {
+                      setShowMenu(false);
+                      onPlay(item, e);
+                    }}
+                  >
+                    <Play size={13} fill="currentColor" />
+                    <span>Resume Playing</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="cw-dropdown-item"
+                  onClick={() => {
+                    setShowMenu(false);
+                    onClick(item);
+                  }}
+                >
+                  <Info size={13} />
+                  <span>View Details</span>
+                </button>
+                {onRemove && (
+                  <button
+                    type="button"
+                    className="cw-dropdown-item danger"
+                    onClick={(e) => {
+                      setShowMenu(false);
+                      onRemove(item, e);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>Remove from History</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {subtitle && <div className="stremio-card-sub-centered">{subtitle}</div>}

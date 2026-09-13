@@ -139,6 +139,7 @@ export const ExpandedShelfModal: React.FC<ExpandedShelfModalProps> = ({
                   <MediaCard
                     key={item.url}
                     item={item}
+                    isContinueWatching={actionType === 'continue_watching'}
                     progressPercent={progressMap ? progressMap[item.url] : undefined}
                     onClick={(media) => {
                       onSelectItem(media);

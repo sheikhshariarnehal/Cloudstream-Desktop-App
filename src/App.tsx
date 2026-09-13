@@ -190,6 +190,7 @@ export const App: React.FC = () => {
     links: ExtractorLink[];
     allEpisodes?: Episode[];
     mediaDetails?: LoadResponse;
+    startTime?: number;
   } | null>(null);
 
   // Load available extensions
@@ -301,12 +302,22 @@ export const App: React.FC = () => {
           data: targetEp.data,
         });
         if (links.length > 0) {
+          const startTime =
+            hist &&
+            hist.position_ms > 3000 &&
+            (!targetEp || targetEp.episode === (hist.episode_num ?? 1)) &&
+            !hist.is_completed &&
+            (hist.duration_ms === 0 || hist.position_ms / hist.duration_ms < 0.95)
+              ? hist.position_ms / 1000
+              : undefined;
+
           setPlayerState({
             item: media,
             episode: targetEp,
             links,
             allEpisodes: details.episodes,
             mediaDetails: details,
+            startTime,
           });
           return;
         }
@@ -773,6 +784,7 @@ export const App: React.FC = () => {
         links={playerState.links}
         allEpisodes={playerState.allEpisodes}
         mediaDetails={playerState.mediaDetails}
+        startTime={playerState.startTime}
         onClose={() => {
           invoke('player_stop').catch(() => {});
           setPlayerState(null);
@@ -1566,7 +1578,10 @@ export const App: React.FC = () => {
                         poster_url: h.poster_url,
                         latest_episode: h.episode_num,
                       }}
+                      isContinueWatching={true}
                       progressPercent={h.duration_ms > 0 ? (h.position_ms / h.duration_ms) * 100 : 0}
+                      onPlay={handleQuickPlay}
+                      onRemove={handleRemoveHistoryItem}
                       onClick={setSelectedItem}
                     />
                   ))}
@@ -1613,10 +1628,11 @@ export const App: React.FC = () => {
             episode: Episode,
             links: ExtractorLink[],
             allEpisodes?: Episode[],
-            mediaDetails?: LoadResponse
+            mediaDetails?: LoadResponse,
+            startTime?: number
           ) => {
             setSelectedItem(null);
-            setPlayerState({ item, episode, links, allEpisodes, mediaDetails });
+            setPlayerState({ item, episode, links, allEpisodes, mediaDetails, startTime });
           }}
           onSelectItem={(newItem: SearchResponse) => {
             setSelectedItem(newItem);

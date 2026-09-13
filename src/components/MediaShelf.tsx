@@ -112,6 +112,7 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
             <MediaCard
               item={item}
               isHorizontal={isHorizontal}
+              isContinueWatching={title.toLowerCase().includes('continue watching') || Boolean(onRemoveItem)}
               progressPercent={progressMap ? progressMap[item.url] : undefined}
               onClick={onSelectItem}
               onPlay={onPlayItem ? (media) => onPlayItem(media) : undefined}

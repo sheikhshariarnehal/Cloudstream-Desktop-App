@@ -32,7 +32,8 @@ interface DetailModalProps {
     episode: Episode,
     links: ExtractorLink[],
     allEpisodes?: Episode[],
-    mediaDetails?: LoadResponse
+    mediaDetails?: LoadResponse,
+    startTime?: number
   ) => void;
   onSelectItem?: (item: SearchResponse) => void;
 }
@@ -214,7 +215,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         data: ep.data,
       });
       if (links && links.length > 0) {
-        onPlay(item, ep, links, details?.episodes, details || undefined);
+        const epHist = watchHistory.find(
+          (h) => (h.season_num ?? 1) === (ep.season || 1) && (h.episode_num ?? 1) === ep.episode
+        );
+        const startTime =
+          epHist &&
+          epHist.position_ms > 3000 &&
+          !epHist.is_completed &&
+          (epHist.duration_ms === 0 || epHist.position_ms / epHist.duration_ms < 0.95)
+            ? epHist.position_ms / 1000
+            : undefined;
+
+        onPlay(item, ep, links, details?.episodes, details || undefined, startTime);
       } else {
         alert('No playable links found for this source.');
       }

@@ -9,6 +9,7 @@ import {
   SearchResponse,
   SkipInterval,
   SubtitleData,
+  WatchHistoryItem,
 } from '../types';
 import {
   ChevronLeft,
@@ -74,6 +75,7 @@ export interface PlayerOverlayProps {
   links: ExtractorLink[];
   allEpisodes?: Episode[];
   mediaDetails?: LoadResponse;
+  startTime?: number;
   onClose: () => void;
   onSelectEpisode?: (ep: Episode) => Promise<void> | void;
 }
@@ -84,6 +86,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   links,
   allEpisodes,
   mediaDetails,
+  startTime,
   onClose,
   onSelectEpisode,
 }) => {
@@ -93,6 +96,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isHoldingSpeedRef = useRef<boolean>(false);
   const loadedUrlRef = useRef<string | null>(null);
+
+  // Resume & Timeline Tracking Refs
+  const targetResumeTimeRef = useRef<number>(startTime ?? 0);
+  const hasResumedRef = useRef<boolean>(false);
+  const isResumingRef = useRef<boolean>(false);
+  const currentTimeRef = useRef<number>(0);
+  const durationRef = useRef<number>(0);
 
   // ── Dynamic Episode & Stream Links State ──────────────────────────────────
   const [currentEpisode, setCurrentEpisode] = useState<Episode>(episode);
@@ -193,7 +203,69 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   const [backdropFading, setBackdropFading] = useState(false);
 
   useEffect(() => {
-    if (isVideoReady) {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  // Load target resume time for current episode if not provided via props or when switching episode
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function checkResumeTime() {
+      // If startTime was provided directly in props for the initial episode
+      if (startTime !== undefined && startTime > 2 && currentEpisode.episode === episode.episode) {
+        targetResumeTimeRef.current = startTime;
+        hasResumedRef.current = false;
+        return;
+      }
+
+      try {
+        const histList: WatchHistoryItem[] = await invoke('get_media_watch_history', {
+          mediaId: item.url,
+        });
+        if (isCancelled) return;
+
+        const epNum = currentEpisode.episode;
+        const sNum = currentEpisode.season || 1;
+        const match = histList.find(
+          (h) => (h.episode_num ?? 1) === epNum && (h.season_num ?? 1) === sNum
+        );
+
+        if (
+          match &&
+          match.position_ms > 3000 &&
+          !match.is_completed &&
+          (match.duration_ms === 0 || match.position_ms / match.duration_ms < 0.95)
+        ) {
+          const sec = match.position_ms / 1000;
+          console.log(`[PlayerOverlay] Found saved progress for S${sNum}E${epNum}: ${sec}s`);
+          targetResumeTimeRef.current = sec;
+          hasResumedRef.current = false;
+        } else {
+          targetResumeTimeRef.current = 0;
+          hasResumedRef.current = true;
+        }
+      } catch (err) {
+        console.error('[PlayerOverlay] Failed to fetch watch history for resume:', err);
+      }
+    }
+
+    checkResumeTime();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [item.url, currentEpisode, startTime, episode.episode]);
+
+  // Determine if video is actively playing or in a no-video state (loading, error, extracting, ended)
+  const isNoVideo = !isVideoReady || Boolean(playbackError) || isExtractingEpisode;
+
+  // Solid Backdrop lifecycle: keep mounted and solid whenever no video is playing
+  useEffect(() => {
+    if (isVideoReady && !isNoVideo) {
       setBackdropFading(true);
       const timer = setTimeout(() => {
         setBackdropMounted(false);
@@ -203,7 +275,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       setBackdropMounted(true);
       setBackdropFading(false);
     }
-  }, [isVideoReady]);
+  }, [isVideoReady, isNoVideo]);
 
   // ── Episodes Calculations (CloudStream Parity) ───────────────────────────
   const episodesList = useMemo(() => {
@@ -425,12 +497,14 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
     const title = `${item.name} · ${
       currentEpisode.name || `Episode ${currentEpisode.episode}`
     }`;
-    console.log('[PlayerOverlay] Loading stream in native MPV:', activeLink.url);
+    const resumeSec = targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : undefined;
+    console.log('[PlayerOverlay] Loading stream in native MPV:', activeLink.url, 'resumeSec:', resumeSec);
 
     invoke('player_load', {
       url: activeLink.url,
       title,
       headers: activeLink.headers || null,
+      startTime: resumeSec ?? null,
     }).catch((e: unknown) => {
       console.error('[PlayerOverlay] Failed to load stream in native MPV:', e);
       tryNextMirror(String(e));
@@ -458,8 +532,36 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
     async function initEvents() {
       unlistenTime = await listen<number>('player://time-pos', (e) => {
         if (typeof e.payload === 'number') {
-          setCurrentTime(e.payload);
-          if (e.payload > 0.3) {
+          const pos = e.payload;
+          setCurrentTime(pos);
+
+          // Handle timeline resume verification and fallback seek
+          if (targetResumeTimeRef.current > 2 && !hasResumedRef.current) {
+            if (Math.abs(pos - targetResumeTimeRef.current) <= 4 || pos >= targetResumeTimeRef.current) {
+              hasResumedRef.current = true;
+              isResumingRef.current = false;
+              triggerFeedback('forward', `Resumed at ${formatTime(targetResumeTimeRef.current)}`);
+              console.log(`[PlayerOverlay] Successfully resumed at ${pos}s`);
+            } else if (pos < 1.5 && !isResumingRef.current) {
+              // Stream started from 0s instead of resume position, force seek
+              isResumingRef.current = true;
+              const target = targetResumeTimeRef.current;
+              console.log(`[PlayerOverlay] Player started at ${pos}s, seeking to resume point ${target}s`);
+              invoke('player_seek', { position: target })
+                .then(() => {
+                  setTimeout(() => {
+                    hasResumedRef.current = true;
+                    isResumingRef.current = false;
+                    triggerFeedback('forward', `Resumed at ${formatTime(target)}`);
+                  }, 500);
+                })
+                .catch(() => {
+                  isResumingRef.current = false;
+                });
+            }
+          }
+
+          if (pos > 0.3) {
             setIsVideoReady(true);
             setIsBuffering(false);
           }
@@ -546,16 +648,24 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             if (parsed.length > 0) setTracks(parsed);
           })
           .catch(() => {});
+
+        // Fallback: If player didn't start at resume position, ensure seek to target
+        if (targetResumeTimeRef.current > 2 && !hasResumedRef.current) {
+          const target = targetResumeTimeRef.current;
+          invoke('player_seek', { position: target }).catch(() => {});
+        }
       });
 
       unlistenError = await listen<PlayerErrorPayload>('player://error', (e) => {
         console.error('[PlayerOverlay] Native playback error received:', e.payload);
+        setIsVideoReady(false);
         tryNextMirror(e.payload.reason || 'Playback decoding error');
       });
 
       // Video Ended / EOF event (CloudStream VideoEndedEvent)
       unlistenEnded = await listen('player://ended', () => {
         setIsPlaying(false);
+        setIsVideoReady(false);
         if (hasNextEp) {
           setNextCountdown(5);
         }
@@ -653,7 +763,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   // ── Save Watch History Progress ───────────────────────────────────────────
   useEffect(() => {
     const saveProgress = () => {
-      if (duration > 0 && currentTime > 0) {
+      // Prevent overwriting saved progress before the player has resumed to the saved timeline!
+      if (!hasResumedRef.current && targetResumeTimeRef.current > 2) {
+        return;
+      }
+      const cur = currentTimeRef.current;
+      const dur = durationRef.current;
+      if (dur > 0 && cur > 0) {
         invoke('save_watch_progress', {
           item: {
             media_id: item.url,
@@ -663,10 +779,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             episode_num: currentEpisode.episode,
             season_num: currentEpisode.season || 1,
             episode_name: currentEpisode.name,
-            position_ms: Math.floor(currentTime * 1000),
-            duration_ms: Math.floor(duration * 1000),
+            position_ms: Math.floor(cur * 1000),
+            duration_ms: Math.floor(dur * 1000),
             last_watched_at: Date.now(),
-            is_completed: currentTime / duration > 0.9,
+            is_completed: cur / dur > 0.9,
           },
         }).catch(() => {});
       }
@@ -676,7 +792,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       clearInterval(interval);
       saveProgress();
     };
-  }, [currentTime, duration, item, currentEpisode]);
+  }, [item, currentEpisode]);
 
   // ── Fullscreen Sync ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -1136,17 +1252,21 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
   return (
     <div
       className={`player-container${showHud ? ' hud-active' : ''}${
-        !isVideoReady ? ' player-loading-mode' : ''
+        isNoVideo ? ' player-solid-mode' : ''
       }`}
       onMouseMove={resetHudTimer}
       onWheel={handleWheel}
     >
-      {/* ── Solid Loading Backdrop ── */}
+      {/* ── Solid Backdrop when no video is playing ── */}
       {backdropMounted && (
         <div className={`player-loading-backdrop${backdropFading ? ' fade-out' : ''}`}>
-          <div className="player-buffering-spinner" />
-          {bufferingPercent > 0 && bufferingPercent < 100 && (
-            <div className="player-buffering-pct">{Math.round(bufferingPercent)}%</div>
+          {isBuffering && !playbackError && (
+            <>
+              <div className="player-buffering-spinner" />
+              {bufferingPercent > 0 && bufferingPercent < 100 && (
+                <div className="player-buffering-pct">{Math.round(bufferingPercent)}%</div>
+              )}
+            </>
           )}
           {isExtractingEpisode && (
             <div className="player-extracting-label">Loading episode streams...</div>
