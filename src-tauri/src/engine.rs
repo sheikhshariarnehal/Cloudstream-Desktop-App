@@ -3,7 +3,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use crate::models::{ExtractorLink, HomePageList, LoadResponse, SearchResponse};
 
 pub const DEFAULT_ENGINE_PORT: u16 = 45732;
@@ -17,14 +19,29 @@ pub struct EngineProviderInfo {
     pub lang: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineStatus {
+    pub is_healthy: bool,
+    pub engine_jar_found: bool,
+    pub engine_jar_path: Option<String>,
+    pub stubs_jar_found: bool,
+    pub java_found: bool,
+    pub java_is_bundled: bool,
+    pub java_path: Option<String>,
+    pub providers_count: usize,
+    pub error: Option<String>,
+}
+
 pub struct EngineClient {
     client: Client,
     base_url: String,
     port: u16,
+    last_error: Arc<RwLock<Option<String>>>,
+    plugins_dir: Option<PathBuf>,
 }
 
 impl EngineClient {
-    pub fn new(port: Option<u16>) -> Self {
+    pub fn new(port: Option<u16>, plugins_dir: Option<PathBuf>) -> Self {
         let p = port.unwrap_or(DEFAULT_ENGINE_PORT);
         Self {
             client: Client::builder()
@@ -33,6 +50,8 @@ impl EngineClient {
                 .unwrap_or_else(|_| Client::new()),
             base_url: format!("http://127.0.0.1:{}", p),
             port: p,
+            last_error: Arc::new(RwLock::new(None)),
+            plugins_dir,
         }
     }
 
@@ -53,60 +72,151 @@ impl EngineClient {
         }
     }
 
-    /// Returns the best Java 17 executable path (required for dex-translator compatibility).
-    fn find_java17() -> String {
-        let jdk17 = PathBuf::from(r"C:\Program Files\Java\jdk-17\bin\java.exe");
-        if jdk17.exists() {
-            return jdk17.to_string_lossy().to_string();
-        }
-        if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            let java = PathBuf::from(java_home).join("bin").join("java.exe");
-            if java.exists() {
-                return java.to_string_lossy().to_string();
+    /// Finds the self-contained portable JRE bundled with the desktop application.
+    pub fn find_bundled_jre() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                // Next to executable
+                candidates.push(parent.join("jre").join("bin").join("java.exe"));
+                // Tauri v2 resources directory
+                candidates.push(parent.join("resources").join("jre").join("bin").join("java.exe"));
             }
         }
-        "java".to_string()
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            candidates.push(PathBuf::from(manifest_dir).join("jre").join("bin").join("java.exe"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("jre").join("bin").join("java.exe"));
+            candidates.push(cwd.join("src-tauri").join("jre").join("bin").join("java.exe"));
+        }
+        // Direct local dev fallback
+        candidates.push(PathBuf::from(r"d:\Poject\CloudStream\CloudStream-Desktop\src-tauri\jre\bin\java.exe"));
+
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
+        }
+        None
     }
 
-    /// Returns the engine JAR path. Searches next to our binary and common build locations.
-    fn find_engine_jar() -> Option<PathBuf> {
-        // Check next to the running executable first (for packaged app)
-        if let Ok(exe) = std::env::current_exe() {
-            let candidates = [
-                exe.parent().map(|p| p.join("engine.jar")),
-                exe.parent().map(|p| p.join("CloudStream Desktop-windows-x64-1.2.4.jar")),
-            ];
-            for c in candidates.into_iter().flatten() {
-                if c.exists() { return Some(c); }
+    /// System Java 17+ discovery fallback if bundled JRE is somehow absent.
+    pub fn find_system_java17() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            candidates.push(PathBuf::from(java_home).join("bin").join("java.exe"));
+        }
+        if let Ok(jdk_home) = std::env::var("JDK_HOME") {
+            candidates.push(PathBuf::from(jdk_home).join("bin").join("java.exe"));
+        }
+
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-17\bin\java.exe"));
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-21\bin\java.exe"));
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-22\bin\java.exe"));
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-23\bin\java.exe"));
+
+        for base in [
+            r"C:\Program Files\Java",
+            r"C:\Program Files\Eclipse Adoptium",
+            r"C:\Program Files\Microsoft",
+            r"C:\Program Files\BellSoft",
+            r"C:\Program Files\Amazon Corretto",
+        ] {
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let java_exe = entry.path().join("bin").join("java.exe");
+                    if java_exe.exists() {
+                        candidates.push(java_exe);
+                    }
+                }
             }
         }
-        // Dev-time: look in src-tauri/ inside our CloudStream-Desktop project
-        let dev_candidates = [
-            PathBuf::from(r"d:\Poject\CloudStream\CloudStream-Desktop\src-tauri\engine.jar"),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engine.jar"),
-        ];
-        for c in dev_candidates {
-            if c.exists() { return Some(c); }
+
+        candidates.push(PathBuf::from(r"C:\Program Files\Common Files\Oracle\Java\javapath\java.exe"));
+
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
+        }
+
+        // Fallback: check if "java" in PATH responds
+        if let Ok(output) = Command::new("java").arg("-version").output() {
+            if output.status.success() || !output.stderr.is_empty() {
+                return Some(PathBuf::from("java"));
+            }
+        }
+
+        None
+    }
+
+    /// Returns (java_path, is_bundled)
+    pub fn find_java() -> Option<(PathBuf, bool)> {
+        // 1. Always prioritize the self-contained bundled JRE
+        if let Some(bundled) = Self::find_bundled_jre() {
+            return Some((bundled, true));
+        }
+        // 2. Fall back to installed system Java 17+
+        if let Some(sys) = Self::find_system_java17() {
+            return Some((sys, false));
+        }
+        None
+    }
+
+    /// Returns the engine JAR path. Searches bundled resources, adjacent paths, and dev locations.
+    pub fn find_engine_jar() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                candidates.push(parent.join("engine.jar"));
+                candidates.push(parent.join("resources").join("engine.jar"));
+                candidates.push(parent.join("CloudStream Desktop-windows-x64-1.2.4.jar"));
+                candidates.push(parent.join("resources").join("CloudStream Desktop-windows-x64-1.2.4.jar"));
+            }
+        }
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            candidates.push(PathBuf::from(manifest_dir).join("engine.jar"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("engine.jar"));
+            candidates.push(cwd.join("src-tauri").join("engine.jar"));
+        }
+        candidates.push(PathBuf::from(r"d:\Poject\CloudStream\CloudStream-Desktop\src-tauri\engine.jar"));
+
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
         }
         None
     }
 
     /// Returns the android-stubs.jar path bundled with our Tauri app.
-    fn find_stubs_jar() -> Option<PathBuf> {
-        // Packaged app: stubs sit next to the executable
+    pub fn find_stubs_jar() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+
         if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let p = dir.join("android-stubs.jar");
-                if p.exists() { return Some(p); }
+            if let Some(parent) = exe.parent() {
+                candidates.push(parent.join("android-stubs.jar"));
+                candidates.push(parent.join("resources").join("android-stubs.jar"));
             }
         }
-        // Dev-time: stubs sit in src-tauri/
-        let dev_candidates = [
-            PathBuf::from(r"d:\Poject\CloudStream\CloudStream-Desktop\src-tauri\android-stubs.jar"),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("android-stubs.jar"),
-        ];
-        for c in dev_candidates {
-            if c.exists() { return Some(c); }
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            candidates.push(PathBuf::from(manifest_dir).join("android-stubs.jar"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("android-stubs.jar"));
+            candidates.push(cwd.join("src-tauri").join("android-stubs.jar"));
+        }
+        candidates.push(PathBuf::from(r"d:\Poject\CloudStream\CloudStream-Desktop\src-tauri\android-stubs.jar"));
+
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
         }
         None
     }
@@ -114,7 +224,6 @@ impl EngineClient {
     /// Kill any process listening on our engine port so we can start fresh.
     #[cfg(target_os = "windows")]
     fn kill_engine_on_port(port: u16) {
-        // netstat -ano -p TCP to find PID
         let output = std::process::Command::new("netstat")
             .args(["-ano", "-p", "TCP"])
             .output();
@@ -143,21 +252,54 @@ impl EngineClient {
         Self::kill_engine_on_port(self.port);
     }
 
+    /// Returns detailed engine health and dependency status.
+    pub async fn get_status(&self) -> EngineStatus {
+        let healthy = self.is_healthy().await;
+        let engine_jar = Self::find_engine_jar();
+        let stubs_jar = Self::find_stubs_jar();
+        let java_info = Self::find_java();
+        let providers_count = if healthy {
+            self.get_providers().await.map(|p| p.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        let err = self.last_error.read().await.clone();
+
+        EngineStatus {
+            is_healthy: healthy,
+            engine_jar_found: engine_jar.is_some(),
+            engine_jar_path: engine_jar.map(|p| p.to_string_lossy().to_string()),
+            stubs_jar_found: stubs_jar.is_some(),
+            java_found: java_info.is_some(),
+            java_is_bundled: java_info.as_ref().map(|(_, b)| *b).unwrap_or(false),
+            java_path: java_info.map(|(p, _)| p.to_string_lossy().to_string()),
+            providers_count,
+            error: err,
+        }
+    }
+
     /// Spawn the engine, wait up to 25 s for it to become healthy.
     pub async fn spawn_and_wait(&self) -> bool {
         let Some(jar_path) = Self::find_engine_jar() else {
-            println!("[EngineClient] Could not locate engine JAR — .cs3 extensions unavailable");
+            let msg = "Could not locate engine JAR (engine.jar) — .cs3 extensions unavailable";
+            println!("[EngineClient] {}", msg);
+            *self.last_error.write().await = Some(msg.to_string());
             return false;
         };
+
+        let Some((java_bin, is_bundled)) = Self::find_java() else {
+            let msg = "Java 17+ runtime not found — neither bundled JRE nor system Java was detected";
+            println!("[EngineClient] {}", msg);
+            *self.last_error.write().await = Some(msg.to_string());
+            return false;
+        };
+
         let jar_dir = jar_path.parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let java_bin = Self::find_java17();
         let stubs = Self::find_stubs_jar();
 
-        // Build classpath: android-stubs.jar;engine.jar
-        // We launch via MainClass instead of -jar so extra classpath entries are honoured.
         let cp = if let Some(ref s) = stubs {
             format!("{};{}", s.to_string_lossy(), jar_path.to_string_lossy())
         } else {
@@ -166,34 +308,42 @@ impl EngineClient {
         let main_class = "com.lagradost.cloudstream.desktop.MainKt";
 
         println!(
-            "[EngineClient] Spawning engine: java={} cp=... MainClass={}",
-            java_bin, main_class
+            "[EngineClient] Spawning engine: java={:?} (bundled: {}) cp=... MainClass={}",
+            java_bin, is_bundled, main_class
         );
         if stubs.is_some() {
             println!("[EngineClient] Android stubs injected — AppCompatActivity crash prevented");
         } else {
-            println!("[EngineClient] Warning: android-stubs.jar not found; CastleTv may crash");
+            println!("[EngineClient] Warning: android-stubs.jar not found");
+        }
+
+        let mut cmd = Command::new(&java_bin);
+        cmd.current_dir(&jar_dir);
+        cmd.args([
+            "-Xverify:none",
+            "-cp", &cp,
+            main_class,
+            "--server",
+            "--port", &self.port.to_string(),
+        ]);
+
+        if let Some(ref pdir) = self.plugins_dir {
+            cmd.args(["--plugins-dir", &pdir.to_string_lossy()]);
         }
 
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            let result = Command::new(&java_bin)
-                .current_dir(&jar_dir)
-                .args([
-                    "-Xverify:none",
-                    "-cp", &cp,
-                    main_class,
-                    "--server",
-                    "--port", &self.port.to_string(),
-                ])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn();
-            if let Err(e) = result {
-                println!("[EngineClient] Failed to spawn engine: {}", e);
-                return false;
-            }
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let result = cmd.spawn();
+        if let Err(e) = result {
+            let msg = format!("Failed to spawn engine with {:?}: {}", java_bin, e);
+            println!("[EngineClient] {}", msg);
+            *self.last_error.write().await = Some(msg);
+            return false;
         }
 
         // Phase 1: Poll up to 25 s for /health to pass
@@ -211,9 +361,13 @@ impl EngineClient {
         }
 
         if !healthy {
-            println!("[EngineClient] Engine did not become healthy within 25s");
+            let msg = "Engine process spawned but failed to become healthy within 25 seconds".to_string();
+            println!("[EngineClient] {}", msg);
+            *self.last_error.write().await = Some(msg);
             return false;
         }
+
+        *self.last_error.write().await = None;
 
         // Phase 2: Wait up to 30 s for /providers to return results (plugins loaded)
         for i in 1..=30 {
@@ -229,43 +383,34 @@ impl EngineClient {
             }
         }
 
-        println!("[EngineClient] Engine healthy but no providers loaded after 30s");
-        true // Engine is up even if empty — still usable
+        println!("[EngineClient] Engine healthy (providers still loading or empty)");
+        true
     }
 
-    pub async fn ensure_running(&self) {
-        let Some(jar_path) = Self::find_engine_jar() else {
-            println!("[EngineClient] No engine JAR found — skipping startup");
-            return;
-        };
-
+    pub async fn ensure_running(&self) -> bool {
         if self.is_healthy().await {
-            // Engine is running. Check if our JAR was rebuilt more recently than
-            // the engine's last startup by probing a simple version marker.
-            // For now, accept it as-is (avoid double-launch on normal restarts).
             println!("[EngineClient] Headless .cs3 engine already active on {}", self.base_url);
-            return;
+            return true;
         }
 
-        println!("[EngineClient] Engine not running — starting now (jar: {:?})", jar_path);
+        println!("[EngineClient] Engine not running — starting now");
 
         #[cfg(target_os = "windows")]
         Self::kill_engine_on_port(self.port);
 
-        self.spawn_and_wait().await;
+        self.spawn_and_wait().await
     }
 
     /// Force-restart the engine (e.g. after a JAR rebuild or corrupt state).
-    pub async fn force_restart(&self) {
+    pub async fn force_restart(&self) -> bool {
         println!("[EngineClient] Force-restarting .cs3 engine...");
 
         #[cfg(target_os = "windows")]
         Self::kill_engine_on_port(self.port);
 
-        // Give the OS a moment to release the port
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        self.spawn_and_wait().await;
+        self.spawn_and_wait().await
     }
 
     pub async fn get_providers(&self) -> Result<Vec<EngineProviderInfo>> {

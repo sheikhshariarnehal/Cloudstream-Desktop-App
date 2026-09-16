@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Check, SlidersHorizontal, RotateCcw, Puzzle } from 'lucide-react';
+import { X, Check, SlidersHorizontal, RotateCcw } from 'lucide-react';
 import { ExtensionInfo, TvType } from '../../types';
+import { ProviderIcon } from '../ProviderIcon';
 
 interface SearchFilterDropdownProps {
   extensions: ExtensionInfo[];
@@ -151,43 +152,7 @@ export const SearchFilterDropdown: React.FC<SearchFilterDropdownProps> = ({
                     {isChecked && <Check size={12} strokeWidth={3} />}
                   </div>
 
-                  {ext.icon_url ? (
-                    <img
-                      src={ext.icon_url}
-                      alt={ext.name}
-                      style={{
-                        width: '22px',
-                        height: '22px',
-                        borderRadius: '5px',
-                        objectFit: 'contain',
-                        background: 'rgba(255,255,255,0.04)',
-                        flexShrink: 0,
-                        border: 'none',
-                      }}
-                      onError={(ev) => {
-                        ev.currentTarget.style.display = 'none';
-                        const sibling = ev.currentTarget.nextElementSibling as HTMLElement | null;
-                        if (sibling) sibling.style.display = 'inline-flex';
-                      }}
-                    />
-                  ) : null}
-                  {/* Fallback icon shown only when image is absent or fails */}
-                  <div
-                    className="filter-ext-fallback-icon"
-                    style={{
-                      display: ext.icon_url ? 'none' : 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: '22px',
-                      height: '22px',
-                      borderRadius: '5px',
-                      background: 'rgba(124, 58, 237, 0.15)',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <Puzzle size={12} color="var(--stremio-purple-light)" />
-                  </div>
-
+                  <ProviderIcon name={ext.name} iconUrl={ext.icon_url} size={22} />
                   <div className="filter-ext-info">
                     <div className="filter-ext-name">{ext.name}</div>
                     <div className="filter-ext-types">

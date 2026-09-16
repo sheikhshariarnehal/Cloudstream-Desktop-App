@@ -248,6 +248,18 @@ export interface ExtensionInfo {
   has_main_page?: boolean;
 }
 
+export interface EngineStatus {
+  is_healthy: boolean;
+  engine_jar_found: boolean;
+  engine_jar_path?: string | null;
+  stubs_jar_found: boolean;
+  java_found: boolean;
+  java_is_bundled: boolean;
+  java_path?: string | null;
+  providers_count: number;
+  error?: string | null;
+}
+
 export interface MpvTrack {
   id: number;
   type: 'video' | 'audio' | 'sub';

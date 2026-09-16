@@ -25,7 +25,6 @@ import {
   RotateCw,
   Server,
   Sliders,
-  Sparkles,
   Subtitles,
   Volume2,
   VolumeX,
@@ -1772,65 +1771,64 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       {showSubMenu && (
         <div
           className="player-popover-card"
-          style={{ right: '110px', width: '320px' }}
+          style={{ right: '110px', width: '300px' }}
           onClick={(e) => e.stopPropagation()}
           onWheel={(e) => e.stopPropagation()}
         >
           <div className="player-popover-header">
-            <span className="player-popover-title">Subtitles & Track Sync</span>
-            <button onClick={() => setShowSubMenu(false)}>
-              <X size={16} />
+            <div className="player-popover-header-title">
+              <Subtitles size={15} strokeWidth={1.75} className="player-popover-icon" />
+              <span>Subtitles</span>
+            </div>
+            <button
+              className="player-popover-close-btn"
+              onClick={() => setShowSubMenu(false)}
+              title="Close"
+            >
+              <X size={15} strokeWidth={1.75} />
             </button>
           </div>
 
           {/* Subtitle Action Buttons: Online Search & Sync delay */}
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div className="player-popover-actions">
             <button
-              className="player-pill full-width"
+              className="player-popover-action-btn"
               onClick={() => {
                 setShowSubMenu(false);
                 setShowOnlineSubModal(true);
               }}
             >
-              <Globe size={13} />
+              <Globe size={13} strokeWidth={1.75} />
               <span>Search Online</span>
             </button>
             <button
-              className="player-pill full-width"
+              className="player-popover-action-btn"
               onClick={() => {
                 setShowSubMenu(false);
                 setShowDelayModal(true);
               }}
             >
-              <Clock size={13} />
+              <Clock size={13} strokeWidth={1.75} />
               <span>Sync Delay</span>
             </button>
           </div>
 
           {/* Subtitles list */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span className="popover-section-label">Subtitle Tracks</span>
-
+          <div className="player-track-list">
             {/* Auto Track */}
             <button
               className={`player-track-item${isAutoSub ? ' active' : ''}`}
               onClick={handleSelectAutoSub}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Sparkles size={16} color={isAutoSub ? '#c084fc' : '#94a3b8'} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontWeight: 600 }}>Auto Track</span>
-                    <span className="cloudstream-tag">CloudStream</span>
-                  </div>
-                  <span style={{ fontSize: '11px', color: isAutoSub ? '#d8b4fe' : '#64748b' }}>
-                    {autoSubMatch
-                      ? `Active: ${autoSubMatch.resolvedName}`
-                      : 'Auto-select preferred language'}
-                  </span>
-                </div>
+              <div className="track-info">
+                <span className="track-name">Auto</span>
+                <span className="track-meta">
+                  {autoSubMatch
+                    ? `Active: ${autoSubMatch.resolvedName}`
+                    : 'Auto-select language'}
+                </span>
               </div>
-              {isAutoSub && <Check size={16} color="#a855f7" />}
+              {isAutoSub && <Check size={16} strokeWidth={2} className="track-check" />}
             </button>
 
             {/* Subtitles Off */}
@@ -1838,37 +1836,30 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
               className={`player-track-item${!isAutoSub && activeSid === 0 ? ' active' : ''}`}
               onClick={handleDisableSubs}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <X size={15} color={!isAutoSub && activeSid === 0 ? '#c084fc' : '#94a3b8'} />
-                <span>Subtitles Off</span>
+              <div className="track-info">
+                <span className="track-name">Off</span>
+                <span className="track-meta">Subtitles disabled</span>
               </div>
-              {!isAutoSub && activeSid === 0 && <Check size={16} color="#a855f7" />}
+              {!isAutoSub && activeSid === 0 && <Check size={16} strokeWidth={2} className="track-check" />}
             </button>
 
             {/* Embedded and Loaded Subtitles */}
             {subTracks.map((tr) => {
               const formatted = formatTrackLabel(tr);
               const isSelected = !isAutoSub && activeSid === tr.id;
-              const isAutoActive = isAutoSub && activeSid === tr.id;
               return (
                 <button
                   key={tr.id}
                   className={`player-track-item${isSelected ? ' active' : ''}`}
                   onClick={() => handleSelectSubTrack(tr.id)}
                 >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span>{formatted.flag}</span>
-                      <span>{formatted.title}</span>
-                      {isAutoActive && <span className="auto-sub-tag">Auto</span>}
-                    </div>
+                  <div className="track-info">
+                    <span className="track-name">{formatted.title}</span>
                     {formatted.subtitle && (
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                        {formatted.subtitle}
-                      </span>
+                      <span className="track-meta">{formatted.subtitle}</span>
                     )}
                   </div>
-                  {isSelected && <Check size={16} color="#a855f7" />}
+                  {isSelected && <Check size={16} strokeWidth={2} className="track-check" />}
                 </button>
               );
             })}
@@ -1880,36 +1871,39 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       {showAudioMenu && (
         <div
           className="player-popover-card"
-          style={{ right: '80px', width: '310px' }}
+          style={{ right: '80px', width: '300px' }}
           onClick={(e) => e.stopPropagation()}
           onWheel={(e) => e.stopPropagation()}
         >
           <div className="player-popover-header">
-            <span className="player-popover-title">Audio Tracks</span>
-            <button onClick={() => setShowAudioMenu(false)}>
-              <X size={16} />
+            <div className="player-popover-header-title">
+              <Headphones size={15} strokeWidth={1.75} className="player-popover-icon" />
+              <span>Audio</span>
+            </div>
+            <button
+              className="player-popover-close-btn"
+              onClick={() => setShowAudioMenu(false)}
+              title="Close"
+            >
+              <X size={15} strokeWidth={1.75} />
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span className="popover-section-label">Available Audio Tracks</span>
-
+          <div className="player-track-list">
+            {/* Auto Track */}
             <button
               className={`player-track-item${isAutoAudio ? ' active' : ''}`}
               onClick={handleSelectAutoAudio}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Sparkles size={16} color={isAutoAudio ? '#c084fc' : '#94a3b8'} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontWeight: 600 }}>Auto Track</span>
-                  <span style={{ fontSize: '11px', color: isAutoAudio ? '#d8b4fe' : '#64748b' }}>
-                    {autoAudioMatch
-                      ? `Active: ${autoAudioMatch.resolvedName}`
-                      : 'Auto-select preferred audio'}
-                  </span>
-                </div>
+              <div className="track-info">
+                <span className="track-name">Auto</span>
+                <span className="track-meta">
+                  {autoAudioMatch
+                    ? `Active: ${autoAudioMatch.resolvedName}`
+                    : 'Auto-select audio'}
+                </span>
               </div>
-              {isAutoAudio && <Check size={16} color="#a855f7" />}
+              {isAutoAudio && <Check size={16} strokeWidth={2} className="track-check" />}
             </button>
 
             {audioTracks.map((tr) => {
@@ -1921,18 +1915,13 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
                   className={`player-track-item${isSelected ? ' active' : ''}`}
                   onClick={() => handleSelectAudioTrack(tr.id)}
                 >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span>{formatted.flag}</span>
-                      <span>{formatted.title}</span>
-                    </div>
+                  <div className="track-info">
+                    <span className="track-name">{formatted.title}</span>
                     {formatted.subtitle && (
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                        {formatted.subtitle}
-                      </span>
+                      <span className="track-meta">{formatted.subtitle}</span>
                     )}
                   </div>
-                  {isSelected && <Check size={16} color="#a855f7" />}
+                  {isSelected && <Check size={16} strokeWidth={2} className="track-check" />}
                 </button>
               );
             })}
@@ -1944,20 +1933,26 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       {showSettingsMenu && (
         <div
           className="player-popover-card"
-          style={{ right: '40px', width: '290px' }}
+          style={{ right: '40px', width: '280px' }}
           onClick={(e) => e.stopPropagation()}
           onWheel={(e) => e.stopPropagation()}
         >
           <div className="player-popover-header">
-            <span className="player-popover-title">Playback Settings</span>
-            <button onClick={() => setShowSettingsMenu(false)}>
-              <X size={16} />
+            <div className="player-popover-header-title">
+              <Sliders size={15} strokeWidth={1.75} className="player-popover-icon" />
+              <span>Settings</span>
+            </div>
+            <button
+              className="player-popover-close-btn"
+              onClick={() => setShowSettingsMenu(false)}
+              title="Close"
+            >
+              <X size={15} strokeWidth={1.75} />
             </button>
           </div>
 
-          {/* Speed */}
-          <div>
-            <span className="popover-section-label">Playback Speed</span>
+          <div className="player-settings-group">
+            <span className="player-settings-label">Speed</span>
             <div className="player-pills-row">
               {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((spd) => (
                 <button
@@ -1971,9 +1966,8 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             </div>
           </div>
 
-          {/* Aspect Ratio / Zoom */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-            <span className="popover-section-label">Aspect Ratio / Resize Mode</span>
+          <div className="player-settings-group">
+            <span className="player-settings-label">Aspect Ratio</span>
             <div className="player-pills-row">
               <button
                 className={`player-pill${panscanVal === 0 ? ' active' : ''}`}
@@ -1982,7 +1976,7 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
                   setPanscanVal(0);
                 }}
               >
-                Fit (Original)
+                Fit
               </button>
               <button
                 className={`player-pill${panscanVal === 1 ? ' active' : ''}`}
@@ -1991,19 +1985,17 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
                   setPanscanVal(1);
                 }}
               >
-                Fill (Crop)
+                Fill
               </button>
             </div>
           </div>
 
-          {/* AniSkip Auto-Skip */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-              <span style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 600 }}>
-                Auto-Skip Intro & Outro
-              </span>
+          <div className="player-settings-group">
+            <label className="player-switch-row">
+              <span className="player-switch-label">Auto-Skip Intro & Outro</span>
               <input
                 type="checkbox"
+                className="player-switch-input"
                 checked={autoSkipIntroOutro}
                 onChange={(e) => {
                   setAutoSkipIntroOutro(e.target.checked);
@@ -2013,17 +2005,16 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             </label>
           </div>
 
-          {/* Diagnostics toggle */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
+          <div className="player-settings-group">
             <button
-              className="player-pill full-width"
+              className="player-popover-action-btn full-width"
               onClick={() => {
                 setShowSettingsMenu(false);
                 toggleDiagnostics();
               }}
             >
-              <Cpu size={14} />
-              <span>Show Native Diagnostics</span>
+              <Cpu size={13} strokeWidth={1.75} />
+              <span>Diagnostics</span>
             </button>
           </div>
         </div>
@@ -2082,10 +2073,10 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
                 className={`player-hud-pill player-hud-server-btn${
                   showServerPicker ? ' active' : ''
                 }`}
-                title="Select Server / Mirror (O)"
+                title="Select Source (O)"
               >
                 <Server size={14} />
-                <span>{activeLink?.source || 'Servers'}</span>
+                <span>{activeLink?.source || 'Sources'}</span>
               </button>
 
               {showServerPicker && (
@@ -2093,22 +2084,45 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
                   className="player-dropdown-menu"
                   onWheel={(e) => e.stopPropagation()}
                 >
-                  <div className="player-dropdown-title">AVAILABLE STREAM MIRRORS</div>
-                  {currentLinks.map((link, idx) => (
+                  <div className="player-popover-header">
+                    <div className="player-popover-header-title">
+                      <Server size={15} strokeWidth={1.75} className="player-popover-icon" />
+                      <span>Sources</span>
+                    </div>
                     <button
-                      key={idx}
-                      onClick={() => {
-                        setCurrentLinkIndex(idx);
-                        setShowServerPicker(false);
-                      }}
-                      className={`player-dropdown-item${
-                        currentLinkIndex === idx ? ' active' : ''
-                      }`}
+                      className="player-popover-close-btn"
+                      onClick={() => setShowServerPicker(false)}
+                      title="Close"
                     >
-                      <span>{link.name}</span>
-                      <span className="player-dropdown-badge">{link.quality}</span>
+                      <X size={15} strokeWidth={1.75} />
                     </button>
-                  ))}
+                  </div>
+                  <div className="player-track-list">
+                    {currentLinks.map((link, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setCurrentLinkIndex(idx);
+                          setShowServerPicker(false);
+                        }}
+                        className={`player-track-item player-source-item${
+                          currentLinkIndex === idx ? ' active' : ''
+                        }`}
+                        title={link.name}
+                      >
+                        <div className="track-info">
+                          <span className="track-name source-full-title">{link.name}</span>
+                          <span className="track-meta">
+                            {link.quality.replace('Quality', '')}
+                            {link.is_m3u8 ? ' • HLS' : ''}
+                          </span>
+                        </div>
+                        {currentLinkIndex === idx && (
+                          <Check size={16} strokeWidth={2} className="track-check" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

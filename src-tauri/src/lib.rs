@@ -10,7 +10,7 @@ pub mod subtitles;
 pub mod videoskip;
 
 use database::Database;
-use engine::EngineClient;
+use engine::{EngineClient, EngineStatus};
 use models::{
     ExpandableShelf, ExtractorLink, ExtensionInfo, HomePageList, LoadResponse, PluginManifest,
     ProviderSearchResult, RepositoryEntry, RepositoryManifest, SearchChunkEvent, SearchHistoryItem,
@@ -1272,6 +1272,17 @@ async fn player_set_gpu_video_processing(enabled: bool, state: State<'_, AppStat
     state.player.set_gpu_video_processing(enabled)
 }
 
+#[tauri::command]
+async fn get_engine_status(state: State<'_, AppState>) -> Result<EngineStatus, String> {
+    Ok(state.engine.get_status().await)
+}
+
+#[tauri::command]
+async fn restart_engine(state: State<'_, AppState>) -> Result<EngineStatus, String> {
+    let _ = state.engine.force_restart().await;
+    Ok(state.engine.get_status().await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1290,7 +1301,7 @@ pub fn run() {
             });
 
             let plugin_manager = Arc::new(PluginManager::new(app_data_dir));
-            let engine = Arc::new(EngineClient::new(None));
+            let engine = Arc::new(EngineClient::new(None, Some(plugin_manager.plugins_dir().clone())));
             
             // Launch background check to ensure .cs3 headless engine is running.
             // After the engine is fully ready (providers loaded), emit 'engine-ready'
@@ -1298,10 +1309,17 @@ pub fn run() {
             let engine_init = engine.clone();
             let app_handle_for_engine = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                engine_init.ensure_running().await;
-                // Signal frontend: engine + plugins are ready
-                println!("[EngineClient] Emitting engine-ready event to frontend");
-                let _ = app_handle_for_engine.emit("engine-ready", ());
+                let ok = engine_init.ensure_running().await;
+                let status = engine_init.get_status().await;
+                if ok {
+                    println!("[EngineClient] Engine ready: {:?}", status);
+                    let _ = app_handle_for_engine.emit("engine-ready", ());
+                    let _ = app_handle_for_engine.emit("engine-status-changed", &status);
+                } else {
+                    eprintln!("[EngineClient] Engine offline/error: {:?}", status);
+                    let _ = app_handle_for_engine.emit("engine-error", &status);
+                    let _ = app_handle_for_engine.emit("engine-status-changed", &status);
+                }
             });
 
             let providers = Arc::new(ProviderRegistry::new(engine.clone(), plugin_manager.clone()));
@@ -1408,6 +1426,8 @@ pub fn run() {
             player_set_hwdec,
             player_set_render_profile,
             player_set_gpu_video_processing,
+            get_engine_status,
+            restart_engine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

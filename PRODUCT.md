@@ -6,55 +6,64 @@
 
 web
 
+## Stack
+
+Self-contained modern HTML5/CSS3/JavaScript in `installer/` (zero build dependencies, ultra-fast loading, directly deployable to GitHub Pages, Cloudflare Pages, or Vercel).
+
 ## Users
 
-Desktop media streamers, movie, anime, and series enthusiasts, and CloudStream users who want a lightweight, snappy, native desktop streaming experience without Android emulation or heavy JVM overhead.
+Media streamers, movie, anime, and series enthusiasts, and CloudStream community members seeking a high-performance, ad-free streaming experience across both Desktop (Windows, macOS, Linux) and Mobile (Android Phone, Android TV, FireStick) without JVM emulation or heavy Electron bloat.
 
 ## Product Purpose
 
-Deliver a high-performance, Stremio-grade native desktop streaming application powered by Rust (Tauri v2) and React 19 / TypeScript. It enables users to browse, search, stream, and manage media from CloudStream repositories, `.cs3` plugins, and built-in scrapers with sub-200ms cold launches, embedded SQLite persistence, and local M3U8 CDN bypass proxying.
+Deliver a unified, high-converting download and showcase landing page for the CloudStream ecosystem. The landing page introduces the new Rust-powered Desktop client (sub-200ms cold launches, ~60MB RAM, built-in M3U8 anti-403 proxy, SQLite persistence) alongside the CloudStream Mobile & Android TV applications, providing direct download binaries, scan-to-install mobile QR codes, repository setup guides, and ecosystem feature comparisons.
 
 ## Positioning
 
-The only native desktop streaming client with direct CloudStream repository and `.cs3` plugin compatibility, sub-80MB memory footprint, built-in M3U8 anti-403 header injection proxy, and automated AniSkip intro/outro skipping.
+The unified open-source streaming ecosystem: Stremio-grade native Rust desktop performance on PC/Mac/Linux harmonized with full CloudStream Android/TV app parity, sharing the exact same `.cs3` multi-provider plugin architecture and zero subscription fee.
 
 ## Operating Context
 
-Desktop entertainment workflows across Windows, macOS, and Linux. Keyboard-driven navigation (`Alt+1..5`, `Space`, `J/K/L`, `F11`), full-screen cinema viewing, multi-source aggregated searching, repository plugin management, and playback resume tracking.
+Web landing portal accessed by desktop and mobile visitors coming from GitHub, Discord, Reddit, and community forums. Features automatic client OS detection, prominent 1-click download actions, scan-to-download QR codes for instant mobile/TV sideloading, side-by-side interactive device previews, and copyable repository configurations.
 
 ## Capabilities and Constraints
 
 - **Capabilities**:
-  - Tauri v2 + Rust backend (Axum local proxy, Reqwest, Tokio, SQLite embedded).
-  - CloudStream repo & `.cs3` plugin installer and manifest engine.
-  - Multi-source parallel search with extension icon attribution and real-time status.
-  - Native providers (NetMirror, Aniwatch, BDIX gigabit FTPs).
-  - Local M3U8 chunk proxy (`127.0.0.1`) injecting referer/user-agent headers to bypass 403 Forbidden CDN blocks.
-  - Video player with HLS streaming, AniSkip intro/outro integration, multi-language subtitles, and watch history/progress tracking.
+  - Client platform auto-detection (Windows, Android, macOS, Linux) to prioritize the correct download CTA.
+  - Desktop installer download targets: Windows Setup (`.exe` x64), portable builds, macOS (`.dmg`), and Linux (`.AppImage`).
+  - Mobile download targets: Android Phone APK (Stable & Pre-release) and Android TV / FireStick APK.
+  - Interactive QR code generator / modal for instant mobile phone scanning from a desktop screen.
+  - Side-by-side cinema device mockup showcasing the Desktop app and Mobile/TV app UI in action.
+  - Technical feature matrix highlighting Rust performance, ~60MB RAM footprint, M3U8 CDN bypass proxy, AniSkip intro skipping, multi-source search, and BDIX gigabit support.
+  - Step-by-step repository setup wizard (`repo.json`) with one-click copyable repository URLs.
 - **Constraints**:
-  - Webview-based UI rendered in Tauri v2 (Chromium / WebView2).
-  - Must remain sub-80MB RAM and maintain smooth 60fps animations and transitions.
+  - Self-contained vanilla web stack within `installer/index.html` (single file or cleanly co-located assets) with no mandatory build or bundler steps.
+  - Fully responsive across mobile (320px+), tablet, and desktop (1440px+).
+  - Ad-free, tracker-free, privacy-respecting client-side execution.
 
 ## Brand Commitments
 
-- Name: CloudStream Desktop (Rust Edition)
-- Aesthetic: Dark cinema-grade glassmorphism, glowing cyan/purple/emerald accents, ultra-smooth micro-interactions, high information density, and Stremio/CloudStream UI familiarity.
+- **Name**: CloudStream Ecosystem (CloudStream Desktop · Rust Edition & CloudStream Mobile)
+- **Palette**: Obsidian Void (`#0c0b12`), Night Violet (`#19173a`), Electric Purple (`#7c3aed`), Neon Cyan (`#06b6d4`), Emerald Accent (`#10b981`), and Pure White (`#ffffff`).
+- **Aesthetic**: Cinema-grade dark glassmorphism, glowing accents, clean typography (Outfit / Inter / JetBrains Mono), flat-rest lift-active elevation, and subtle 60fps micro-animations.
 
 ## Evidence on Hand
 
-- Rust backend in `src-tauri/src/` (`lib.rs`, `database.rs`, `plugins.rs`, `proxy.rs`, `extractors/`).
-- Frontend React UI in `src/` (`App.tsx`, `App.css`, `components/`, `types/`).
-- Architecture guides: `cloudstream_rust_desktop_architecture.md`, `search_page_architecture_and_implementation_guide.md`.
+- Rust backend and desktop application code in `src-tauri/` and `src/`.
+- Android mobile repository in `d:\Poject\CloudStream\cloudstream`.
+- Incumbent installer landing prototype in `installer/index.html`.
+- Impeccable design specifications in `DESIGN.md` and `.impeccable/design.json`.
 
 ## Product Principles
 
-1. **Instantaneous & Lightweight**: Sub-200ms startup, instant UI feedback, and zero bloat or JVM overhead.
-2. **Ecosystem Parity**: Native compatibility with CloudStream Android plugins, repositories, and media models.
-3. **Immersive Cinema Experience**: Dark glassmorphic visual hierarchy that elevates poster art and media content without visual clutter.
-4. **Resilient Streaming**: Transparent local proxying to ensure stream links work seamlessly without CDN blockades.
-5. **Keyboard-First Fluidity**: Full desktop keyboard navigation and shortcuts for player and browsing controls.
+1. **Immediate Value & Frictionless Action**: Automatically detect the visitor's operating system, offering immediate 1-click downloads and mobile QR codes with zero ads, survey walls, or redirects.
+2. **Unified Multi-Screen Ecosystem**: Position Desktop and Mobile as two halves of a cohesive streaming universe that share the same `.cs3` plugins, providers, and community.
+3. **Transparent Performance Superiority**: Let the numbers speak—highlight sub-200ms cold startup, 60MB RAM footprint, and native Rust reliability over bloated alternatives.
+4. **Frictionless Mobile & TV Sideloading**: Provide prominent QR codes and step-by-step setup guides to make Android and Android TV installation seamless.
+5. **Privacy & Open Source Truth**: Emphasize free forever, zero telemetry, GPL/Apache open-source integrity, and direct GitHub releases.
 
 ## Accessibility & Inclusion
 
-- High contrast dark mode UI with readable typography hierarchy.
-- Comprehensive keyboard navigation and screen-safe media controls.
+- High-contrast text exceeding WCAG 2.1 AA standards on dark canvas backgrounds.
+- Full keyboard navigability (`Tab`, `Enter`, `Space`, `Escape` for modals).
+- Screen-reader friendly semantic structure (`h1`-`h3`, ARIA labels, descriptive image alt tags).

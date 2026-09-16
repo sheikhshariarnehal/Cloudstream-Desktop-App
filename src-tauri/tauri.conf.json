@@ -33,7 +33,10 @@
     "targets": "all",
     "resources": [
       "libmpv-2.dll",
-      "libmpv/libmpv-2.dll"
+      "libmpv/libmpv-2.dll",
+      "engine.jar",
+      "android-stubs.jar",
+      "jre/**/*"
     ],
     "icon": [
       "icons/32x32.png",

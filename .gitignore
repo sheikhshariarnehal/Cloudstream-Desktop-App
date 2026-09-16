@@ -36,6 +36,8 @@ src-tauri/libmpv/*.lib
 *.exe
 *.jar
 src-tauri/*.jar
+src-tauri/jre/
+*.png
 
 # Environment & Sensitive
 .env

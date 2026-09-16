@@ -13,6 +13,7 @@ import {
   WatchlistItem,
   WatchStatusFilter,
   LoadResponse,
+  EngineStatus,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MediaCard } from './components/MediaCard';
@@ -24,6 +25,7 @@ import { MediaShelf } from './components/MediaShelf';
 import { HeroBanner } from './components/HeroBanner';
 import { HomeShelfRow, HomeShelfSeeAllEntry } from './components/HomeShelfRow';
 import { LazyMount } from './components/LazyMount';
+import { ProviderIcon } from './components/ProviderIcon';
 
 // Code-split heavy, conditionally-rendered screens/modals so the initial
 // mainpage bundle only pays for what it actually renders on first paint.
@@ -40,6 +42,7 @@ import {
   ChevronDown,
   Maximize2,
   Puzzle,
+  AlertTriangle,
   Check,
   Plus,
   Download,
@@ -184,13 +187,10 @@ export const App: React.FC = () => {
   // Extensions / Providers state
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
   const [selectedExtension, setSelectedExtension] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('cloudstream_selected_extension');
-      return (saved && saved !== 'all' && saved !== 'random' && saved !== 'none') ? saved : '';
-    } catch {
-      return '';
-    }
+    return localStorage.getItem('cloudstream_selected_extension') || '';
   });
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [isRestartingEngine, setIsRestartingEngine] = useState(false);
 
   // Home ViewModel (CloudStream HomeViewModel parity)
   const {
@@ -488,15 +488,58 @@ export const App: React.FC = () => {
     }
     loadLibraryData();
 
+    // Check engine status immediately on startup
+    const checkEngine = async () => {
+      try {
+        const st: EngineStatus = await invoke('get_engine_status');
+        setEngineStatus(st);
+      } catch (err) {
+        console.error('[App] Failed to fetch engine status:', err);
+      }
+    };
+    checkEngine();
+
     // When the Rust backend finishes starting the engine + loading all plugins,
     // it emits 'engine-ready'. Auto-reload so the user never sees an empty page.
-    const unlisten = listen('engine-ready', () => {
+    const unlistenReady = listen('engine-ready', () => {
       console.log('[App] engine-ready received — reloading extensions + home');
+      checkEngine();
       loadExtensions();
     });
 
-    return () => { unlisten.then(fn => fn()); };
+    const unlistenError = listen<EngineStatus>('engine-error', (event) => {
+      console.warn('[App] engine-error received:', event.payload);
+      setEngineStatus(event.payload);
+    });
+
+    const unlistenStatus = listen<EngineStatus>('engine-status-changed', (event) => {
+      setEngineStatus(event.payload);
+    });
+
+    return () => {
+      unlistenReady.then((fn) => fn());
+      unlistenError.then((fn) => fn());
+      unlistenStatus.then((fn) => fn());
+    };
   }, []);
+
+  const handleRestartEngine = async () => {
+    setIsRestartingEngine(true);
+    try {
+      const newStatus: EngineStatus = await invoke('restart_engine');
+      setEngineStatus(newStatus);
+      if (newStatus.is_healthy) {
+        await loadExtensions();
+        if (selectedExtension) {
+          loadHome(selectedExtension);
+        }
+      }
+    } catch (e) {
+      console.error('[App] Failed to restart engine:', e);
+    } finally {
+      setIsRestartingEngine(false);
+    }
+  };
 
   const handleSelectExtension = (extName: string) => {
     setSelectedExtension(extName);
@@ -1045,24 +1088,12 @@ export const App: React.FC = () => {
               >
                 {extensions.length === 0 ? (
                   <Puzzle size={14} color="var(--stremio-purple-light)" />
-                ) : currentExtObj?.icon_url ? (
-                  <>
-                    <img
-                      src={currentExtObj.icon_url}
-                      alt={currentExtObj.name}
-                      style={{ width: '18px', height: '18px', borderRadius: '4px', objectFit: 'contain', flexShrink: 0 }}
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        const sib = e.currentTarget.nextElementSibling as HTMLElement | null;
-                        if (sib) sib.style.display = 'inline-flex';
-                      }}
-                    />
-                    <span style={{ display: 'none', alignItems: 'center', justifyContent: 'center' }}>
-                      <Puzzle size={14} color="var(--stremio-purple-light)" />
-                    </span>
-                  </>
                 ) : (
-                  <Puzzle size={14} color="var(--stremio-purple-light)" />
+                  <ProviderIcon
+                    name={currentExtObj?.name || selectedExtension}
+                    iconUrl={currentExtObj?.icon_url}
+                    size={18}
+                  />
                 )}
                 <span className="stremio-ext-badge-text">
                   {extensions.length === 0
@@ -1156,42 +1187,7 @@ export const App: React.FC = () => {
                           style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                         >
                           <div className="ext-option-left" style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                            {ext.icon_url ? (
-                              <img
-                                src={ext.icon_url}
-                                alt={ext.name}
-                                style={{
-                                  width: '22px',
-                                  height: '22px',
-                                  borderRadius: '5px',
-                                  objectFit: 'contain',
-                                  background: 'rgba(255,255,255,0.04)',
-                                  flexShrink: 0,
-                                  border: 'none',
-                                }}
-                                onError={(ev) => {
-                                  ev.currentTarget.style.display = 'none';
-                                  const sibling = ev.currentTarget.nextElementSibling as HTMLElement | null;
-                                  if (sibling) sibling.style.display = 'inline-flex';
-                                }}
-                              />
-                            ) : null}
-                            {/* Fallback icon shown only when image is absent or fails */}
-                            <div
-                              className="ext-option-fallback-icon"
-                              style={{
-                                display: ext.icon_url ? 'none' : 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '22px',
-                                height: '22px',
-                                borderRadius: '5px',
-                                background: 'rgba(124, 58, 237, 0.15)',
-                                flexShrink: 0,
-                              }}
-                            >
-                              <Puzzle size={12} color="var(--stremio-purple-light)" />
-                            </div>
+                            <ProviderIcon name={ext.name} iconUrl={ext.icon_url} size={22} />
                             <span className="ext-option-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {ext.name}
                             </span>
@@ -1321,12 +1317,57 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               ) : shelves.length === 0 && continueWatchingItems.length === 0 && watchlist.length === 0 ? (
-                <div className="home-error-card">
-                  <Puzzle size={42} color="var(--stremio-purple-light)" />
-                  <h3>No Media Returned for {selectedExtension || 'Selected Extension'}</h3>
-                  <p>
-                    Could not load shelves from this extension. Ensure your network has proper connectivity (or BDIX if required), or select another extension.
-                  </p>
+                engineStatus && !engineStatus.is_healthy ? (
+                  <div className="home-error-card" style={{ borderColor: 'rgba(239, 68, 68, 0.3)', background: 'linear-gradient(180deg, rgba(239, 68, 68, 0.08) 0%, rgba(15, 17, 26, 0.95) 100%)' }}>
+                    <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                      <AlertTriangle size={32} color="#ef4444" />
+                    </div>
+                    <h3 style={{ color: '#fca5a5' }}>
+                      {!engineStatus.engine_jar_found
+                        ? 'Engine Component Missing (engine.jar)'
+                        : !engineStatus.java_found
+                        ? 'Java 17+ Runtime Required'
+                        : 'Extension Engine Offline'}
+                    </h3>
+                    <p style={{ maxWidth: '560px', margin: '0 auto 20px', lineHeight: 1.6, color: '#cbd5e1' }}>
+                      {!engineStatus.engine_jar_found
+                        ? 'The extension engine runner (engine.jar) could not be located in your CloudStream Desktop directory. Please verify your installation or reinstall the application.'
+                        : !engineStatus.java_found
+                        ? 'The CloudStream extension engine requires Java 17 or higher to run extensions on desktop, but neither the bundled JRE nor system Java was detected on this PC.'
+                        : engineStatus.error || 'The extension engine process is offline. Restarting the engine will reload the background runner.'}
+                    </p>
+                    <div className="home-error-actions" style={{ justifyContent: 'center', gap: '12px' }}>
+                      {!engineStatus.java_found && (
+                        <button
+                          className="btn-primary"
+                          onClick={() => openUrl('https://adoptium.net/temurin/releases/?version=17')}
+                          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        >
+                          <Download size={16} />
+                          Download Java 17 (Adoptium)
+                        </button>
+                      )}
+                      <button
+                        className="btn-primary"
+                        onClick={handleRestartEngine}
+                        disabled={isRestartingEngine}
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        <RefreshCw size={16} className={isRestartingEngine ? 'animate-spin' : ''} />
+                        {isRestartingEngine ? 'Starting Engine...' : 'Restart Engine'}
+                      </button>
+                      <button className="btn-secondary" onClick={() => setActiveTab('settings')}>
+                        View Settings & Diagnostics
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="home-error-card">
+                    <Puzzle size={42} color="var(--stremio-purple-light)" />
+                    <h3>No Media Returned for {selectedExtension || 'Selected Extension'}</h3>
+                    <p>
+                      Could not load shelves from this extension. Ensure your network has proper connectivity (or BDIX if required), or select another extension.
+                    </p>
                     <div className="home-error-actions">
                       <button
                         className="btn-secondary"
@@ -1352,6 +1393,7 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                )
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
                 <div>

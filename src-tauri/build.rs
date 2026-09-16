@@ -28,14 +28,24 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-arg=/LIBPATH:{}", lib_dir.display());
 
-    // Copy libmpv-2.dll to the target output directory so it runs during development and test
+    // Copy libmpv-2.dll, engine.jar, and android-stubs.jar to target directory so dev runs find them
     if let Ok(out_dir) = env::var("OUT_DIR") {
         let out_path = PathBuf::from(out_dir);
         if let Some(target_dir) = out_path.ancestors().nth(3) {
             let src_dll = lib_dir.join("libmpv-2.dll");
             let dst_dll = target_dir.join("libmpv-2.dll");
-            if src_dll.exists() {
+            if src_dll.exists() && !dst_dll.exists() {
                 let _ = fs::copy(&src_dll, &dst_dll);
+            }
+            let src_engine = manifest_path.join("engine.jar");
+            let dst_engine = target_dir.join("engine.jar");
+            if src_engine.exists() && !dst_engine.exists() {
+                let _ = fs::copy(&src_engine, &dst_engine);
+            }
+            let src_stubs = manifest_path.join("android-stubs.jar");
+            let dst_stubs = target_dir.join("android-stubs.jar");
+            if src_stubs.exists() && !dst_stubs.exists() {
+                let _ = fs::copy(&src_stubs, &dst_stubs);
             }
         }
     }

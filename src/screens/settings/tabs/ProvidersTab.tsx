@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSettings } from '../../../hooks/useSettings';
-import { Check } from 'lucide-react';
+import { Check, Cpu, RefreshCw, Download } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { LANGUAGES } from '../../../utils/subtitleHelper';
+import { EngineStatus } from '../../../types';
 
 const TV_TYPES = [
   { id: 'Movie', label: 'Movies' },
@@ -16,6 +19,34 @@ const TV_TYPES = [
 
 export const ProvidersTab: React.FC = () => {
   const { settings, updateSetting } = useSettings();
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const fetchStatus = async () => {
+      try {
+        const st: EngineStatus = await invoke('get_engine_status');
+        if (mounted) setEngineStatus(st);
+      } catch (e) {
+        console.error('Failed to get engine status in settings:', e);
+      }
+    };
+    fetchStatus();
+    return () => { mounted = false; };
+  }, []);
+
+  const handleRestartEngine = async () => {
+    setIsRestarting(true);
+    try {
+      const st: EngineStatus = await invoke('restart_engine');
+      setEngineStatus(st);
+    } catch (e) {
+      console.error('Failed to restart engine:', e);
+    } finally {
+      setIsRestarting(false);
+    }
+  };
 
   const toggleTvType = (typeId: string) => {
     const current = settings.preferredMediaTypes;
@@ -159,6 +190,79 @@ export const ProvidersTab: React.FC = () => {
           />
           <span className="stremio-switch-slider" />
         </label>
+      </div>
+
+      {/* Extension Engine Diagnostics & Health */}
+      <div className="stremio-settings-section-divider" style={{ margin: '24px 0 16px', borderTop: '1px solid rgba(255,255,255,0.08)' }} />
+      
+      <div className="stremio-setting-row" style={{ alignItems: 'flex-start' }}>
+        <div className="stremio-setting-label-col">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Cpu size={18} color="var(--stremio-purple-light)" />
+            <span className="stremio-setting-label">Extension Engine (.cs3 Runner)</span>
+          </div>
+          <span className="stremio-setting-subtext">
+            Background JVM runner for executing CloudStream provider plugins on desktop
+          </span>
+          {engineStatus && (
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
+              <div>Java Runtime: <span style={{ color: '#f1f5f9' }}>{engineStatus.java_path || (engineStatus.java_found ? 'Detected' : 'Not Found')}</span> {engineStatus.java_is_bundled && <span style={{ color: '#10b981', marginLeft: 4 }}>(Bundled JRE)</span>}</div>
+              <div>Engine JAR: <span style={{ color: '#f1f5f9' }}>{engineStatus.engine_jar_found ? (engineStatus.engine_jar_path || 'Found') : 'Missing'}</span></div>
+              <div>Active Providers: <span style={{ color: '#f1f5f9' }}>{engineStatus.providers_count}</span></div>
+              {engineStatus.error && <div style={{ color: '#ef4444', marginTop: 4 }}>Error: {engineStatus.error}</div>}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 12px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                background: engineStatus?.is_healthy ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                color: engineStatus?.is_healthy ? '#34d399' : '#f87171',
+                border: `1px solid ${engineStatus?.is_healthy ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: engineStatus?.is_healthy ? '#34d399' : '#f87171',
+                }}
+              />
+              {engineStatus?.is_healthy ? 'Engine Online' : 'Engine Offline'}
+            </span>
+
+            <button
+              className="btn-secondary"
+              onClick={handleRestartEngine}
+              disabled={isRestarting}
+              style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <RefreshCw size={13} className={isRestarting ? 'animate-spin' : ''} />
+              {isRestarting ? 'Restarting...' : 'Restart Engine'}
+            </button>
+          </div>
+
+          {engineStatus && !engineStatus.java_found && (
+            <button
+              className="btn-primary"
+              onClick={() => openUrl('https://adoptium.net/temurin/releases/?version=17')}
+              style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Download size={12} />
+              Download Java 17+
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

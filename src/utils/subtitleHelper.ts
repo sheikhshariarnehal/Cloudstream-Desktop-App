@@ -171,6 +171,9 @@ export function getLanguageDisplay(input?: string | null): { name: string; flag:
 /**
  * Check if a track matches the target language code according to CloudStream rules
  */
+/**
+ * Check if a track matches the target language code according to CloudStream rules
+ */
 export function matchesLanguageCode(trackLangOrTitle?: string | null, targetCode: string = 'en'): boolean {
   if (!trackLangOrTitle) return false;
   const targetMeta = getLanguageMetadata(targetCode, true);
@@ -223,7 +226,7 @@ export function getAutoSelectSubtitle(
     const display = getLanguageDisplay(matchedEmbedded.lang || matchedEmbedded.title);
     return {
       track: matchedEmbedded,
-      resolvedName: `${display.flag} ${display.name}`,
+      resolvedName: display.name || 'Auto Matched',
     };
   }
 
@@ -240,7 +243,7 @@ export function getAutoSelectSubtitle(
     const display = getLanguageDisplay(matchedExternal.languageCode || matchedExternal.originalName || matchedExternal.language);
     return {
       externalSub: matchedExternal,
-      resolvedName: `${display.flag} ${display.name} (Online)`,
+      resolvedName: display.name ? `${display.name} (Online)` : 'Online Subtitle',
     };
   }
 
@@ -250,7 +253,7 @@ export function getAutoSelectSubtitle(
     const display = getLanguageDisplay(defaultSub.lang || defaultSub.title);
     return {
       track: defaultSub,
-      resolvedName: `${display.flag} ${display.name}`,
+      resolvedName: display.name || 'Default Track',
     };
   }
 
@@ -260,7 +263,7 @@ export function getAutoSelectSubtitle(
     const display = getLanguageDisplay(first.lang || first.title);
     return {
       track: first,
-      resolvedName: `${display.flag} ${display.name}`,
+      resolvedName: display.name || 'First Track',
     };
   }
 
@@ -286,7 +289,7 @@ export function getAutoSelectAudio(
       const display = getLanguageDisplay(matched.lang || matched.title);
       return {
         track: matched,
-        resolvedName: `${display.flag} ${display.name}`,
+        resolvedName: display.name || 'Auto Matched',
       };
     }
   }
@@ -296,27 +299,131 @@ export function getAutoSelectAudio(
   const display = getLanguageDisplay(defaultTrack.lang || defaultTrack.title);
   return {
     track: defaultTrack,
-    resolvedName: defaultTrack.lang || defaultTrack.title ? `${display.flag} ${display.name}` : 'Default Audio',
+    resolvedName: defaultTrack.lang || defaultTrack.title ? (display.name || 'Default Audio') : 'Default Audio',
   };
+}
+
+/**
+ * Clean spam websites, file extensions, and torrent release tags from track titles
+ */
+export function sanitizeTrackTitle(title?: string | null): string {
+  if (!title) return '';
+  return title
+    // Remove web domains (e.g., ~ 4kHdHub.com, HDHub4u.Ms, yts.mx, rarbg.to)
+    .replace(/(?:~|\-|\|)?\s*(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9-]+\.(?:com|net|org|ms|in|to|mx|tv|cc|vip|co|me|xyz|info|pro)\b/gi, '')
+    // Remove brackets with spam
+    .replace(/\[\s*(?:4kHdHub|HDHub4u|yts|rarbg|psa|pahe|galaxyrg|flux|qxr|utr|ettv|tgx)[^\]]*\]/gi, '')
+    // Remove extra trailing dashes, tildes, pipes, or spaces
+    .replace(/^[\s~|\-]+|[\s~|\-]+$/g, '')
+    .trim();
 }
 
 /**
  * Format track label for UI display
  */
-export function formatTrackLabel(track: MpvTrack): { title: string; subtitle: string; flag: string } {
+export function formatTrackLabel(track: MpvTrack): {
+  title: string;
+  subtitle: string;
+  flag: string;
+  langCode: string;
+  langName: string;
+  isDefault?: boolean;
+  isForced?: boolean;
+} {
   const display = getLanguageDisplay(track.lang || track.title);
-  const title = track.title || display.name || `Track #${track.id}`;
+  const langName = display.name && display.name !== 'Unknown' ? display.name : '';
+  const langCode = (display.tag || track.lang || (track.type === 'audio' ? 'AUD' : 'SUB')).slice(0, 2).toUpperCase();
 
+  const cleanedRawTitle = sanitizeTrackTitle(track.title);
+
+  // Check for common descriptors in title or codec
+  const lowerTitle = (track.title || '').toLowerCase();
+  const isSDH = lowerTitle.includes('sdh') || lowerTitle.includes('cc');
+  const isForced = lowerTitle.includes('forced') || (track as any).forced === true;
+  const isCommentary = lowerTitle.includes('commentary') || lowerTitle.includes('director');
+  const isDescription = lowerTitle.includes('description') || lowerTitle.includes('descriptive') || lowerTitle.includes('narrated');
+  const isOriginal = lowerTitle.includes('org') || lowerTitle.includes('original') || lowerTitle.includes('main');
+
+  // Determine main display title
+  let mainTitle = '';
+  if (langName) {
+    mainTitle = langName;
+    const modifiers: string[] = [];
+    if (isOriginal && track.type === 'audio') modifiers.push('Original');
+    if (isSDH) modifiers.push('SDH');
+    if (isForced) modifiers.push('Forced');
+    if (isCommentary) modifiers.push('Commentary');
+    if (isDescription) modifiers.push('Audio Description');
+
+    if (modifiers.length > 0) {
+      mainTitle = `${langName} (${modifiers.join(', ')})`;
+    }
+  } else if (cleanedRawTitle) {
+    mainTitle = cleanedRawTitle;
+  } else {
+    mainTitle = track.type === 'audio' ? `Audio Track #${track.id}` : `Subtitle Track #${track.id}`;
+  }
+
+  // Build secondary metadata line
   const metaParts: string[] = [];
-  if (track.lang) metaParts.push(track.lang.toUpperCase());
-  if (track.codec) metaParts.push(track.codec.toUpperCase());
+
+  // Codec formatting
+  if (track.codec) {
+    const c = track.codec.toLowerCase();
+    if (c.includes('eac3') || c.includes('eac-3') || c.includes('ec-3')) {
+      metaParts.push('E-AC-3');
+    } else if (c.includes('ac3') || c.includes('ac-3')) {
+      metaParts.push('AC-3');
+    } else if (c.includes('subrip') || c.includes('srt')) {
+      metaParts.push('SRT');
+    } else if (c.includes('hdmv_pgs') || c.includes('pgs')) {
+      metaParts.push('PGS');
+    } else if (c.includes('ass') || c.includes('ssa')) {
+      metaParts.push('ASS');
+    } else if (c.includes('vtt')) {
+      metaParts.push('VTT');
+    } else if (c.includes('aac')) {
+      metaParts.push('AAC');
+    } else if (c.includes('flac')) {
+      metaParts.push('FLAC');
+    } else if (c.includes('dts')) {
+      metaParts.push('DTS');
+    } else if (c.includes('opus')) {
+      metaParts.push('Opus');
+    } else if (c.includes('truehd')) {
+      metaParts.push('TrueHD');
+    } else {
+      metaParts.push(track.codec.toUpperCase());
+    }
+  }
+
+  // Audio channels formatting
   const ch = track.audio_channels || track['audio-channels'];
-  if (ch) metaParts.push(`${ch} ch`);
-  if (track.default) metaParts.push('Default');
+  if (ch) {
+    if (ch === 6) metaParts.push('5.1 Surround');
+    else if (ch === 8) metaParts.push('7.1 Surround');
+    else if (ch === 2) metaParts.push('Stereo');
+    else if (ch === 1) metaParts.push('Mono');
+    else metaParts.push(`${ch} Channels`);
+  }
+
+  // Extract bitrate if present in raw title (e.g. 640kbps, 448kbps, 320kbps)
+  const bitrateMatch = lowerTitle.match(/(\d{2,4}\s*kbps)/i);
+  if (bitrateMatch) {
+    metaParts.push(bitrateMatch[1]);
+  }
+
+  if (track.default) {
+    metaParts.push('Default');
+  }
 
   return {
-    title,
+    title: mainTitle,
     subtitle: metaParts.join(' • '),
     flag: display.flag,
+    langCode: langCode.length === 2 ? langCode : (display.tag ? display.tag.slice(0, 2).toUpperCase() : (track.type === 'audio' ? 'AU' : 'CC')),
+    langName: langName || 'Unknown',
+    isDefault: !!track.default,
+    isForced,
   };
 }
