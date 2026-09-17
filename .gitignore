@@ -36,6 +36,7 @@ src-tauri/libmpv/*.lib
 *.exe
 *.jar
 src-tauri/*.jar
+src-tauri/stubs/classes/
 src-tauri/jre/
 *.png
 

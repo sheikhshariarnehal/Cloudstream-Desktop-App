@@ -87,7 +87,6 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     effectiveTvType === 'LiveStream';
 
   const isAnime = effectiveTvType === 'Anime' || effectiveTvType === 'OVA';
-  const isEpisodeBased = !isMovie;
 
   // CloudStream Type Label Architecture
   const typeLabel = useMemo(() => {
@@ -466,12 +465,33 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     return { totalEpisodes, seasonCount, detailLabel };
   }, [details, seasons]);
 
+  // Plot Expansion State
+  const [plotExpanded, setPlotExpanded] = useState(false);
+
+  // Formatted Duration (e.g. "1h 48m" or "45m")
+  const formattedDuration = useMemo(() => {
+    if (!details?.duration_minutes || details.duration_minutes <= 0) return null;
+    const mins = details.duration_minutes;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0) {
+      return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    }
+    return `${m}m`;
+  }, [details]);
+
   // Year fallback (CloudStream ResultViewModel2 logic)
   const displayYear = useMemo(() => {
     if (details?.year) return details.year;
     if (item.year) return item.year;
     const match = (details?.name || item.name || '').match(/\b(19\d\d|20\d\d)\b/);
-    return match ? parseInt(match[1], 10) : null;
+    if (match) return parseInt(match[1], 10);
+    const epRelease = details?.episodes?.[0]?.release_date;
+    if (epRelease) {
+      const yrMatch = epRelease.match(/\b(19\d\d|20\d\d)\b/);
+      if (yrMatch) return parseInt(yrMatch[1], 10);
+    }
+    return null;
   }, [details, item]);
 
   // Score fallback
@@ -555,101 +575,451 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           </button>
         </div>
       ) : details ? (
-        <div className="stremio-detail-split-view">
-          {/* LEFT PANEL: Title, Meta, Genres, Cast, Summary, Action Buttons */}
-          <div className="stremio-left-info-panel">
-            {/* Main Stylized Title */}
-            <h1 className="stremio-media-title">{details.name}</h1>
+        isMovie ? (
+          /* ================= MOVIE HERO CINEMATIC LAYOUT ================= */
+          <div className="stremio-detail-layout movie-mode">
+            <div className="stremio-movie-hero-section">
+              {/* Main Stylized Title */}
+              <h1 className="stremio-media-title">{details.name}</h1>
 
-            {/* Anime Japanese/English Alt Title */}
-            {(details.jap_name || details.eng_name) && (
-              <div className="stremio-alt-title">
-                {details.jap_name}
-                {details.eng_name && details.eng_name !== details.name && (
-                  <span> • {details.eng_name}</span>
-                )}
-              </div>
-            )}
-
-            {/* Meta Row: Type Badge, Series Stats / Duration, Year, Rating, Status */}
-            <div className="stremio-meta-row">
-              {/* CloudStream TvType Badge */}
-              <span
-                className={`stremio-meta-badge type-badge ${
-                  effectiveTvType?.toLowerCase() || ''
-                }`}
-              >
-                {typeLabel}
-              </span>
-
-              {/* Show Status Badge (Ongoing / Completed) */}
-              {displayStatus && (
-                <span
-                  className={`stremio-meta-badge status-badge ${displayStatus.toLowerCase()}`}
-                >
-                  {displayStatus.toLowerCase() === 'ongoing' && (
-                    <span className="status-live-dot" />
+              {/* Japanese/English Alt Title */}
+              {(details.jap_name || details.eng_name) && (
+                <div className="stremio-alt-title">
+                  {details.jap_name}
+                  {details.eng_name && details.eng_name !== details.name && (
+                    <span> • {details.eng_name}</span>
                   )}
-                  {displayStatus}
-                </span>
+                </div>
               )}
 
-              {/* Series Seasons & Episode count OR Movie Duration */}
-              {isEpisodeBased ? (
-                seriesStats.detailLabel ? (
-                  <span className="stremio-meta-val series-stats-val">
-                    {seriesStats.detailLabel}
+              {/* Meta Row: Type Badge, Year, Duration, Score, Rating, Status */}
+              <div className="stremio-meta-row">
+                <span
+                  className={`stremio-meta-badge type-badge ${
+                    effectiveTvType?.toLowerCase() || ''
+                  }`}
+                >
+                  {typeLabel}
+                </span>
+
+                {displayYear ? (
+                  <span className="stremio-meta-val">{displayYear}</span>
+                ) : null}
+
+                {formattedDuration ? (
+                  <span className="stremio-meta-val">{formattedDuration}</span>
+                ) : null}
+
+                {displayScore !== undefined && displayScore !== null ? (
+                  <span className="stremio-meta-val rating-val">
+                    <span className="stremio-imdb-badge">IMDb</span>
+                    {displayScore.toFixed(1)}
                   </span>
-                ) : null
-              ) : details.duration_minutes ? (
-                <span className="stremio-meta-val">
-                  {details.duration_minutes} min
-                </span>
-              ) : null}
+                ) : null}
 
-              {/* Series per-episode average duration if available */}
-              {isEpisodeBased && details.duration_minutes ? (
-                <span className="stremio-meta-val ep-duration-val">
-                  ~{details.duration_minutes}m/ep
-                </span>
-              ) : null}
+                {details.content_rating && (
+                  <span className="stremio-meta-badge">
+                    {details.content_rating}
+                  </span>
+                )}
 
-              {/* Year (with – suffix for series) */}
-              {displayYear ? (
-                <span className="stremio-meta-val">
-                  {displayYear}
-                  {isEpisodeBased ? '–' : ''}
-                </span>
-              ) : null}
+                {displayStatus && (
+                  <span
+                    className={`stremio-meta-badge status-badge ${displayStatus.toLowerCase()}`}
+                  >
+                    {displayStatus.toLowerCase() === 'ongoing' && (
+                      <span className="status-live-dot" />
+                    )}
+                    {displayStatus}
+                  </span>
+                )}
+              </div>
 
-              {/* IMDb Score */}
-              {displayScore !== undefined && displayScore !== null ? (
-                <span className="stremio-meta-val rating-val">
-                  {displayScore.toFixed(1)}
-                  <span className="stremio-imdb-badge">IMDb</span>
-                </span>
-              ) : null}
+              {/* Action Buttons Bar */}
+              <div className="stremio-actions-bar">
+                {/* Primary Play / Resume CTA */}
+                {primaryCTA && (
+                  <button
+                    type="button"
+                    className="stremio-action-play-btn"
+                    onClick={() => handlePlayEpisode(primaryCTA.episode)}
+                    disabled={extractingKey !== null}
+                  >
+                    <Play size={18} fill="#ffffff" color="#ffffff" />
+                    <span>
+                      {extractingKey ? 'Extracting...' : primaryCTA.label}
+                    </span>
+                    {primaryCTA.progress !== null && (
+                      <div
+                        className="stremio-play-progress-bar"
+                        style={{ width: `${primaryCTA.progress}%` }}
+                      />
+                    )}
+                  </button>
+                )}
 
-              {/* Content Rating */}
-              {details.content_rating && (
-                <span className="stremio-meta-badge">
-                  {details.content_rating}
-                </span>
+                {/* Trailer Button */}
+                {details.trailers && details.trailers.length > 0 ? (
+                  <button
+                    type="button"
+                    className="stremio-action-trailer-btn"
+                    onClick={() => setActiveTrailerUrl(details.trailers[0])}
+                  >
+                    <Video size={17} />
+                    <span>Trailer</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="stremio-action-trailer-btn"
+                    onClick={() => {
+                      const q = encodeURIComponent(`${details.name} official trailer`);
+                      window.open(`https://www.youtube.com/results?search_query=${q}`, '_blank');
+                    }}
+                  >
+                    <Video size={17} />
+                    <span>Trailer</span>
+                  </button>
+                )}
+
+                {/* Library / Watchlist Status Dropdown */}
+                <div className="stremio-dropdown-wrapper">
+                  <button
+                    type="button"
+                    className={`stremio-action-circle-btn ${
+                      watchlistStatus ? 'active' : ''
+                    }`}
+                    onClick={() => setShowStatusDropdown(!showStatusDropdown)}
+                    title={watchlistStatus ? `Watchlist: ${watchlistStatus}` : 'Add to Library'}
+                  >
+                    <Bookmark size={18} fill={watchlistStatus ? 'currentColor' : 'none'} />
+                  </button>
+
+                  {showStatusDropdown && (
+                    <div className="stremio-watchlist-popup">
+                      <div className="popup-title">Watch Status</div>
+                      {Object.entries(WATCHLIST_STATUS_CONFIG).map(
+                        ([key, cfg]) => (
+                          <button
+                            key={key}
+                            className={`popup-item ${
+                              watchlistStatus === key ? 'selected' : ''
+                            }`}
+                            onClick={() => handleSetWatchlistStatus(key)}
+                          >
+                            <span
+                              className="popup-dot"
+                              style={{ backgroundColor: cfg.color }}
+                            />
+                            <span>{cfg.label}</span>
+                            {watchlistStatus === key && <Check size={14} />}
+                          </button>
+                        )
+                      )}
+                      {watchlistStatus && (
+                        <button
+                          className="popup-item remove-opt"
+                          onClick={() => handleSetWatchlistStatus(null)}
+                        >
+                          <X size={14} color="#f87171" />
+                          <span>Remove from Library</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Share Button */}
+                <button
+                  type="button"
+                  className="stremio-action-share-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(item.url);
+                    alert('Media link copied to clipboard!');
+                  }}
+                  title="Share link"
+                >
+                  <Share2 size={18} />
+                </button>
+              </div>
+
+              {/* Plot Synopsis (Clean, Readable, with subtle Expand) */}
+              {details.plot && (
+                <div className="stremio-summary-container">
+                  <p className={`stremio-summary-text ${plotExpanded ? 'expanded' : ''}`}>
+                    {details.plot}
+                  </p>
+                  {details.plot.length > 220 && (
+                    <button
+                      type="button"
+                      className="stremio-summary-toggle"
+                      onClick={() => setPlotExpanded(!plotExpanded)}
+                    >
+                      {plotExpanded ? 'Show less' : 'Read more'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Genres Tag Chips */}
+              {details.tags && details.tags.length > 0 && (
+                <div className="stremio-chips-row">
+                  {details.tags.slice(0, 7).map((genre) => (
+                    <span key={genre} className="stremio-pill-chip">
+                      {genre}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Starring Cast */}
+              {details.cast && details.cast.length > 0 && (
+                <div className="stremio-cast-row">
+                  <span className="stremio-cast-label">Starring</span>
+                  <span className="stremio-cast-names">
+                    {details.cast.slice(0, 5).map((a) => a.name).join(', ')}
+                  </span>
+                </div>
               )}
             </div>
 
-            {/* Next Airing Alert (Anime) */}
-            {nextAiringText && (
-              <div className="stremio-next-airing-banner">
-                <Radio size={14} className="pulse-icon" />
-                <span>{nextAiringText}</span>
+            {/* Recommendations Shelf (Horizontal at bottom - ONLY if recommendations exist) */}
+            {details.recommendations && details.recommendations.length > 0 && (
+              <div className="stremio-movie-recs-shelf">
+                <div className="stremio-shelf-title">More Like This</div>
+                <div className="stremio-shelf-scroll-row">
+                  {details.recommendations.map((rec) => (
+                    <div
+                      key={rec.url}
+                      className="stremio-shelf-card"
+                      onClick={() => onSelectItem?.(rec)}
+                    >
+                      <div className="stremio-shelf-poster-wrapper">
+                        <img
+                          src={
+                            rec.poster_url ||
+                            'https://via.placeholder.com/160x240'
+                          }
+                          alt={rec.name}
+                          className="stremio-shelf-poster"
+                        />
+                      </div>
+                      <div className="stremio-shelf-card-info">
+                        <div className="stremio-shelf-card-name" title={rec.name}>
+                          {rec.name}
+                        </div>
+                        {rec.year && (
+                          <div className="stremio-shelf-card-year">{rec.year}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+          </div>
+        ) : (
+          /* ================= SERIES / ANIME SPLIT LAYOUT ================= */
+          <div className="stremio-detail-layout series-mode">
+            {/* Left Info Column */}
+            <div className="stremio-left-info-panel">
+              <h1 className="stremio-media-title">{details.name}</h1>
 
-            {/* GENRES Section */}
-            {details.tags && details.tags.length > 0 && (
-              <div className="stremio-info-section">
-                <div className="stremio-section-label">GENRES</div>
+              {(details.jap_name || details.eng_name) && (
+                <div className="stremio-alt-title">
+                  {details.jap_name}
+                  {details.eng_name && details.eng_name !== details.name && (
+                    <span> • {details.eng_name}</span>
+                  )}
+                </div>
+              )}
+
+              <div className="stremio-meta-row">
+                <span
+                  className={`stremio-meta-badge type-badge ${
+                    effectiveTvType?.toLowerCase() || ''
+                  }`}
+                >
+                  {typeLabel}
+                </span>
+
+                {displayStatus && (
+                  <span
+                    className={`stremio-meta-badge status-badge ${displayStatus.toLowerCase()}`}
+                  >
+                    {displayStatus.toLowerCase() === 'ongoing' && (
+                      <span className="status-live-dot" />
+                    )}
+                    {displayStatus}
+                  </span>
+                )}
+
+                {seriesStats.detailLabel && (
+                  <span className="stremio-meta-val series-stats-val">
+                    {seriesStats.detailLabel}
+                  </span>
+                )}
+
+                {details.duration_minutes ? (
+                  <span className="stremio-meta-val ep-duration-val">
+                    ~{details.duration_minutes}m/ep
+                  </span>
+                ) : null}
+
+                {displayYear ? (
+                  <span className="stremio-meta-val">
+                    {displayYear}–
+                  </span>
+                ) : null}
+
+                {displayScore !== undefined && displayScore !== null ? (
+                  <span className="stremio-meta-val rating-val">
+                    <span className="stremio-imdb-badge">IMDb</span>
+                    {displayScore.toFixed(1)}
+                  </span>
+                ) : null}
+
+                {details.content_rating && (
+                  <span className="stremio-meta-badge">
+                    {details.content_rating}
+                  </span>
+                )}
+              </div>
+
+              {nextAiringText && (
+                <div className="stremio-next-airing-banner">
+                  <Radio size={14} className="pulse-icon" />
+                  <span>{nextAiringText}</span>
+                </div>
+              )}
+
+              {/* Action Buttons Bar */}
+              <div className="stremio-actions-bar">
+                {primaryCTA && (
+                  <button
+                    type="button"
+                    className="stremio-action-play-btn"
+                    onClick={() => handlePlayEpisode(primaryCTA.episode)}
+                    disabled={extractingKey !== null}
+                  >
+                    <Play size={18} fill="#ffffff" color="#ffffff" />
+                    <span>
+                      {extractingKey ? 'Extracting...' : primaryCTA.label}
+                    </span>
+                    {primaryCTA.progress !== null && (
+                      <div
+                        className="stremio-play-progress-bar"
+                        style={{ width: `${primaryCTA.progress}%` }}
+                      />
+                    )}
+                  </button>
+                )}
+
+                {/* Trailer Button */}
+                {details.trailers && details.trailers.length > 0 ? (
+                  <button
+                    type="button"
+                    className="stremio-action-trailer-btn"
+                    onClick={() => setActiveTrailerUrl(details.trailers[0])}
+                  >
+                    <Video size={17} />
+                    <span>Trailer</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="stremio-action-trailer-btn"
+                    onClick={() => {
+                      const q = encodeURIComponent(`${details.name} official trailer`);
+                      window.open(`https://www.youtube.com/results?search_query=${q}`, '_blank');
+                    }}
+                  >
+                    <Video size={17} />
+                    <span>Trailer</span>
+                  </button>
+                )}
+
+                {/* Watchlist Dropdown */}
+                <div className="stremio-dropdown-wrapper">
+                  <button
+                    type="button"
+                    className={`stremio-action-circle-btn ${
+                      watchlistStatus ? 'active' : ''
+                    }`}
+                    onClick={() => setShowStatusDropdown(!showStatusDropdown)}
+                    title={watchlistStatus ? `Watchlist: ${watchlistStatus}` : 'Add to Library'}
+                  >
+                    <Bookmark size={18} fill={watchlistStatus ? 'currentColor' : 'none'} />
+                  </button>
+
+                  {showStatusDropdown && (
+                    <div className="stremio-watchlist-popup">
+                      <div className="popup-title">Watch Status</div>
+                      {Object.entries(WATCHLIST_STATUS_CONFIG).map(
+                        ([key, cfg]) => (
+                          <button
+                            key={key}
+                            className={`popup-item ${
+                              watchlistStatus === key ? 'selected' : ''
+                            }`}
+                            onClick={() => handleSetWatchlistStatus(key)}
+                          >
+                            <span
+                              className="popup-dot"
+                              style={{ backgroundColor: cfg.color }}
+                            />
+                            <span>{cfg.label}</span>
+                            {watchlistStatus === key && <Check size={14} />}
+                          </button>
+                        )
+                      )}
+                      {watchlistStatus && (
+                        <button
+                          className="popup-item remove-opt"
+                          onClick={() => handleSetWatchlistStatus(null)}
+                        >
+                          <X size={14} color="#f87171" />
+                          <span>Remove from Library</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Share Button */}
+                <button
+                  type="button"
+                  className="stremio-action-share-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(item.url);
+                    alert('Media link copied to clipboard!');
+                  }}
+                  title="Share link"
+                >
+                  <Share2 size={18} />
+                </button>
+              </div>
+
+              {/* Plot Synopsis */}
+              {details.plot && (
+                <div className="stremio-summary-container">
+                  <p className={`stremio-summary-text ${plotExpanded ? 'expanded' : ''}`}>
+                    {details.plot}
+                  </p>
+                  {details.plot.length > 200 && (
+                    <button
+                      type="button"
+                      className="stremio-summary-toggle"
+                      onClick={() => setPlotExpanded(!plotExpanded)}
+                    >
+                      {plotExpanded ? 'Show less' : 'Read more'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Genres Tag Chips */}
+              {details.tags && details.tags.length > 0 && (
                 <div className="stremio-chips-row">
                   {details.tags.slice(0, 6).map((genre) => (
                     <span key={genre} className="stremio-pill-chip">
@@ -657,366 +1027,207 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     </span>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* CAST Section */}
-            {details.cast && details.cast.length > 0 && (
-              <div className="stremio-info-section">
-                <div className="stremio-section-label">CAST</div>
-                <div className="stremio-chips-row">
-                  {details.cast.slice(0, 5).map((actor) => (
-                    <span key={actor.name} className="stremio-pill-chip">
-                      {actor.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* SUMMARY Section */}
-            <div className="stremio-info-section summary-section">
-              <div className="stremio-section-label">SUMMARY</div>
-              <p className="stremio-summary-text">
-                {details.plot || 'No summary available for this title.'}
-              </p>
-            </div>
-
-            {/* ACTION BUTTONS BAR */}
-            <div className="stremio-actions-bar">
-              {/* Primary Play / Resume CTA */}
-              {primaryCTA && (
-                <button
-                  type="button"
-                  className="stremio-action-play-btn"
-                  onClick={() => handlePlayEpisode(primaryCTA.episode)}
-                  disabled={extractingKey !== null}
-                >
-                  <Play size={18} fill="#ffffff" color="#ffffff" />
-                  <span>
-                    {extractingKey ? 'Extracting...' : primaryCTA.label}
+              {/* Starring Cast */}
+              {details.cast && details.cast.length > 0 && (
+                <div className="stremio-cast-row">
+                  <span className="stremio-cast-label">Starring</span>
+                  <span className="stremio-cast-names">
+                    {details.cast.slice(0, 5).map((a) => a.name).join(', ')}
                   </span>
-                  {primaryCTA.progress !== null && (
-                    <div
-                      className="stremio-play-progress-bar"
-                      style={{ width: `${primaryCTA.progress}%` }}
-                    />
-                  )}
-                </button>
+                </div>
               )}
-
-              {/* Trailer Button */}
-              {details.trailers && details.trailers.length > 0 ? (
-                <button
-                  type="button"
-                  className="stremio-action-trailer-btn"
-                  onClick={() => setActiveTrailerUrl(details.trailers[0])}
-                >
-                  <Video size={17} />
-                  <span>Trailer</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="stremio-action-trailer-btn"
-                  onClick={() => {
-                    const q = encodeURIComponent(`${details.name} official trailer`);
-                    window.open(`https://www.youtube.com/results?search_query=${q}`, '_blank');
-                  }}
-                >
-                  <Video size={17} />
-                  <span>Trailer</span>
-                </button>
-              )}
-
-              {/* Library / Watchlist Status Dropdown */}
-              <div className="stremio-dropdown-wrapper">
-                <button
-                  type="button"
-                  className={`stremio-action-circle-btn ${
-                    watchlistStatus ? 'active' : ''
-                  }`}
-                  onClick={() => setShowStatusDropdown(!showStatusDropdown)}
-                  title={watchlistStatus ? `Watchlist: ${watchlistStatus}` : 'Add to Library'}
-                >
-                  <Bookmark size={18} fill={watchlistStatus ? 'currentColor' : 'none'} />
-                </button>
-
-                {showStatusDropdown && (
-                  <div className="stremio-watchlist-popup">
-                    <div className="popup-title">Watch Status</div>
-                    {Object.entries(WATCHLIST_STATUS_CONFIG).map(
-                      ([key, cfg]) => (
-                        <button
-                          key={key}
-                          className={`popup-item ${
-                            watchlistStatus === key ? 'selected' : ''
-                          }`}
-                          onClick={() => handleSetWatchlistStatus(key)}
-                        >
-                          <span
-                            className="popup-dot"
-                            style={{ backgroundColor: cfg.color }}
-                          />
-                          <span>{cfg.label}</span>
-                          {watchlistStatus === key && <Check size={14} />}
-                        </button>
-                      )
-                    )}
-                    {watchlistStatus && (
-                      <button
-                        className="popup-item remove-opt"
-                        onClick={() => handleSetWatchlistStatus(null)}
-                      >
-                        <X size={14} color="#f87171" />
-                        <span>Remove from Library</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Share Button */}
-              <button
-                type="button"
-                className="stremio-action-share-btn"
-                onClick={() => {
-                  navigator.clipboard.writeText(item.url);
-                  alert('Media link copied to clipboard!');
-                }}
-                title="Share link"
-              >
-                <Share2 size={18} />
-              </button>
             </div>
-          </div>
 
-          {/* RIGHT PANEL: Episodes & Season Picker (or Recommendations for Movies) */}
-          <div className="stremio-right-episodes-panel">
-            {!isMovie ? (
-              <>
-                {/* Header: Prev, Season Dropdown, Next */}
-                <div className="stremio-episodes-panel-header">
+            {/* Right Episodes Panel */}
+            <div className="stremio-right-episodes-panel">
+              {/* Header: Prev, Season Dropdown, Next */}
+              <div className="stremio-episodes-panel-header">
+                <button
+                  className="season-nav-btn"
+                  onClick={handlePrevSeason}
+                  disabled={currentSeasonIndex <= 0}
+                >
+                  <ChevronLeft size={16} />
+                  <span>Prev</span>
+                </button>
+
+                <div className="season-select-wrapper">
                   <button
-                    className="season-nav-btn"
-                    onClick={handlePrevSeason}
-                    disabled={currentSeasonIndex <= 0}
+                    className="season-select-btn"
+                    onClick={() => setShowSeasonDropdown(!showSeasonDropdown)}
                   >
-                    <ChevronLeft size={16} />
-                    <span>Prev</span>
+                    <span>{getSeasonLabel(selectedSeason)}</span>
+                    <ChevronDown size={14} />
                   </button>
 
-                  <div className="season-select-wrapper">
-                    <button
-                      className="season-select-btn"
-                      onClick={() => setShowSeasonDropdown(!showSeasonDropdown)}
-                    >
-                      <span>{getSeasonLabel(selectedSeason)}</span>
-                      <ChevronDown size={14} />
-                    </button>
-
-                    {showSeasonDropdown && (
-                      <div className="season-select-dropdown">
-                        {seasons.map((s) => (
-                          <button
-                            key={s}
-                            className={`season-dropdown-opt ${
-                              selectedSeason === s ? 'active' : ''
-                            }`}
-                            onClick={() => {
-                              setSelectedSeason(s);
-                              setShowSeasonDropdown(false);
-                            }}
-                          >
-                            <span>{getSeasonLabel(s)}</span>
-                            {selectedSeason === s && <Check size={14} />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    className="season-nav-btn"
-                    onClick={handleNextSeason}
-                    disabled={currentSeasonIndex >= seasons.length - 1}
-                  >
-                    <span>Next</span>
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-
-                {/* Anime Sub / Dub Switcher if applicable */}
-                {isAnime && availableDubs.length > 1 && (
-                  <div className="stremio-anime-dub-bar">
-                    {availableDubs.map((dub) => {
-                      const count = details.episodes.filter(
-                        (e) => (e.dub_status || 'Subbed') === dub
-                      ).length;
-                      return (
+                  {showSeasonDropdown && (
+                    <div className="season-select-dropdown">
+                      {seasons.map((s) => (
                         <button
-                          key={dub}
-                          className={`stremio-dub-pill ${
-                            activeDub === dub ? 'active' : ''
+                          key={s}
+                          className={`season-dropdown-opt ${
+                            selectedSeason === s ? 'active' : ''
                           }`}
-                          onClick={() => setActiveDub(dub)}
+                          onClick={() => {
+                            setSelectedSeason(s);
+                            setShowSeasonDropdown(false);
+                          }}
                         >
-                          {dub === 'Dubbed' ? 'Dub' : 'Sub'} ({count})
+                          <span>{getSeasonLabel(s)}</span>
+                          {selectedSeason === s && <Check size={14} />}
                         </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Search Videos Input */}
-                <div className="stremio-videos-search-box">
-                  <input
-                    type="text"
-                    placeholder="search videos"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                  {searchQuery ? (
-                    <button
-                      className="search-clear-btn"
-                      onClick={() => setSearchQuery('')}
-                    >
-                      <X size={14} />
-                    </button>
-                  ) : (
-                    <Search size={16} className="search-icon-right" />
-                  )}
-                </div>
-
-                {/* Episode List */}
-                <div className="stremio-episodes-list-scroll">
-                  {displayEpisodes.length > 0 ? (
-                    displayEpisodes.map((ep) => {
-                      const epKey = `${ep.season || 1}_${ep.episode}`;
-                      const history = progressMap.get(epKey);
-                      const progressPercent =
-                        history && history.duration_ms > 0
-                          ? Math.min(
-                              100,
-                              Math.round(
-                                (history.position_ms / history.duration_ms) *
-                                  100
-                              )
-                            )
-                          : 0;
-                      const isExtracting = extractingKey === epKey;
-
-                      return (
-                        <div
-                          key={epKey}
-                          className={`stremio-episode-item ${
-                            isExtracting ? 'extracting' : ''
-                          }`}
-                          onClick={() => handlePlayEpisode(ep)}
-                        >
-                          {/* 16:9 Thumbnail preview */}
-                          <div className="stremio-ep-thumb-wrapper">
-                            <img
-                              src={
-                                ep.poster_url ||
-                                details.poster_url ||
-                                'https://via.placeholder.com/320x180?text=Episode'
-                              }
-                              alt={ep.name || `Episode ${ep.episode}`}
-                              className="stremio-ep-thumb"
-                            />
-
-                            {/* Play Overlay */}
-                            <div className="stremio-ep-thumb-overlay">
-                              {isExtracting ? (
-                                <div className="stremio-mini-spinner" />
-                              ) : (
-                                <Play size={20} fill="#ffffff" color="#ffffff" />
-                              )}
-                            </div>
-
-                            {/* Watched checkmark */}
-                            {history?.is_completed && (
-                              <div className="stremio-ep-watched-check">
-                                <Check size={11} strokeWidth={3} />
-                              </div>
-                            )}
-
-                            {/* Progress bar at bottom */}
-                            {progressPercent > 0 && (
-                              <div className="stremio-ep-progress-bar">
-                                <div
-                                  className="stremio-ep-progress-fill"
-                                  style={{ width: `${progressPercent}%` }}
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Episode Title & Date */}
-                          <div className="stremio-ep-meta">
-                            <div className="stremio-ep-title" title={ep.name}>
-                              {ep.episode}. {ep.name || `Episode ${ep.episode}`}
-                            </div>
-                            {ep.release_date && (
-                              <div className="stremio-ep-date">
-                                {ep.release_date}
-                              </div>
-                            )}
-                            {ep.description && (
-                              <div className="stremio-ep-desc">
-                                {ep.description}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="stremio-no-episodes">
-                      <span>No episodes found</span>
+                      ))}
                     </div>
                   )}
                 </div>
-              </>
-            ) : (
-              /* Movie Right Panel: Recommendations & Details */
-              <div className="stremio-movie-right-panel">
-                <div className="movie-panel-title">More Like This</div>
-                {details.recommendations && details.recommendations.length > 0 ? (
-                  <div className="stremio-movie-recs-grid">
-                    {details.recommendations.map((rec) => (
-                      <div
-                        key={rec.url}
-                        className="stremio-movie-rec-card"
-                        onClick={() => onSelectItem?.(rec)}
+
+                <button
+                  className="season-nav-btn"
+                  onClick={handleNextSeason}
+                  disabled={currentSeasonIndex >= seasons.length - 1}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              {/* Anime Sub / Dub Switcher if applicable */}
+              {isAnime && availableDubs.length > 1 && (
+                <div className="stremio-anime-dub-bar">
+                  {availableDubs.map((dub) => {
+                    const count = details.episodes.filter(
+                      (e) => (e.dub_status || 'Subbed') === dub
+                    ).length;
+                    return (
+                      <button
+                        key={dub}
+                        className={`stremio-dub-pill ${
+                          activeDub === dub ? 'active' : ''
+                        }`}
+                        onClick={() => setActiveDub(dub)}
                       >
-                        <img
-                          src={
-                            rec.poster_url ||
-                            'https://via.placeholder.com/160x240'
-                          }
-                          alt={rec.name}
-                          className="movie-rec-poster"
-                        />
-                        <div className="movie-rec-name" title={rec.name}>
-                          {rec.name}
-                        </div>
-                        {rec.year && (
-                          <div className="movie-rec-year">{rec.year}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                        {dub === 'Dubbed' ? 'Dub' : 'Sub'} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Search Videos Input */}
+              <div className="stremio-videos-search-box">
+                <input
+                  type="text"
+                  placeholder="Search episodes..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery ? (
+                  <button
+                    className="search-clear-btn"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    <X size={14} />
+                  </button>
                 ) : (
-                  <div className="stremio-no-recs">
-                    <span>No recommendations available</span>
+                  <Search size={16} className="search-icon-right" />
+                )}
+              </div>
+
+              {/* Episode List */}
+              <div className="stremio-episodes-list-scroll">
+                {displayEpisodes.length > 0 ? (
+                  displayEpisodes.map((ep) => {
+                    const epKey = `${ep.season || 1}_${ep.episode}`;
+                    const history = progressMap.get(epKey);
+                    const progressPercent =
+                      history && history.duration_ms > 0
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              (history.position_ms / history.duration_ms) *
+                                100
+                            )
+                          )
+                        : 0;
+                    const isExtracting = extractingKey === epKey;
+
+                    return (
+                      <div
+                        key={epKey}
+                        className={`stremio-episode-item ${
+                          isExtracting ? 'extracting' : ''
+                        }`}
+                        onClick={() => handlePlayEpisode(ep)}
+                      >
+                        {/* 16:9 Thumbnail preview */}
+                        <div className="stremio-ep-thumb-wrapper">
+                          <img
+                            src={
+                              ep.poster_url ||
+                              details.poster_url ||
+                              'https://via.placeholder.com/320x180?text=Episode'
+                            }
+                            alt={ep.name || `Episode ${ep.episode}`}
+                            className="stremio-ep-thumb"
+                          />
+
+                          {/* Play Overlay */}
+                          <div className="stremio-ep-thumb-overlay">
+                            {isExtracting ? (
+                              <div className="stremio-mini-spinner" />
+                            ) : (
+                              <Play size={20} fill="#ffffff" color="#ffffff" />
+                            )}
+                          </div>
+
+                          {/* Watched checkmark */}
+                          {history?.is_completed && (
+                            <div className="stremio-ep-watched-check">
+                              <Check size={11} strokeWidth={3} />
+                            </div>
+                          )}
+
+                          {/* Progress bar at bottom */}
+                          {progressPercent > 0 && (
+                            <div className="stremio-ep-progress-bar">
+                              <div
+                                className="stremio-ep-progress-fill"
+                                style={{ width: `${progressPercent}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Episode Title & Date */}
+                        <div className="stremio-ep-meta">
+                          <div className="stremio-ep-title" title={ep.name}>
+                            {ep.episode}. {ep.name || `Episode ${ep.episode}`}
+                          </div>
+                          {ep.release_date && (
+                            <div className="stremio-ep-date">
+                              {ep.release_date}
+                            </div>
+                          )}
+                          {ep.description && (
+                            <div className="stremio-ep-desc">
+                              {ep.description}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="stremio-no-episodes">
+                    <span>No episodes found</span>
                   </div>
                 )}
               </div>
-            )}
+            </div>
           </div>
-        </div>
+        )
       ) : null}
 
       {/* Trailer Modal Overlay */}

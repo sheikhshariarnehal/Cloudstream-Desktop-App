@@ -281,6 +281,7 @@ async fn get_home_catalog(
     page: Option<i32>,
     state: State<'_, AppState>,
 ) -> Result<Vec<HomePageList>, String> {
+    state.engine.ensure_running().await;
     let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
     let page_num = page.unwrap_or(1);
     let resolved = resolve_provider_name(&state, provider).await;
@@ -343,6 +344,7 @@ async fn get_home_shelves(
     provider: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ExpandableShelf>, String> {
+    state.engine.ensure_running().await;
     let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
     if installed.is_empty() {
         return Ok(Vec::new());
@@ -806,6 +808,7 @@ async fn clear_search_history(state: State<'_, AppState>) -> Result<(), String> 
 
 #[tauri::command]
 async fn load_media(provider: String, url: String, state: State<'_, AppState>) -> Result<LoadResponse, String> {
+    state.engine.ensure_running().await;
     let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
     state
         .providers
@@ -816,6 +819,7 @@ async fn load_media(provider: String, url: String, state: State<'_, AppState>) -
 
 #[tauri::command]
 async fn load_links(provider: String, data: String, state: State<'_, AppState>) -> Result<Vec<ExtractorLink>, String> {
+    state.engine.ensure_running().await;
     let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
     let raw_links = state
         .providers

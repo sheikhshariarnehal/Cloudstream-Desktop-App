@@ -320,6 +320,9 @@ impl EngineClient {
         let mut cmd = Command::new(&java_bin);
         cmd.current_dir(&jar_dir);
         cmd.args([
+            // Disable strict JVM bytecode verification.
+            // DEX-to-JVM translated classes (from .cs3 plugins) have mismatched
+            // StackMapTable entries that fail Java 13+ verification but run fine at runtime.
             "-Xverify:none",
             "-cp", &cp,
             main_class,

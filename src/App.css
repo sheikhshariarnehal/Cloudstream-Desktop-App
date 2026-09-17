@@ -5417,91 +5417,81 @@ body, html, #root {
 }
 
 /* ==========================================================================
-   STREMIO GLOSSY TRANSPARENT DETAIL VIEW (Pure Borderless Glass Parity)
+   STREMIO / CLOUDSTREAM MEDIA DETAIL MODAL (CINEMATIC HIERARCHY)
    ========================================================================== */
 
+/* Fullscreen Detail Overlay Container */
 .stremio-detail-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: #0b0914;
+  inset: 0;
   z-index: 9999;
-  overflow: hidden;
-  user-select: none;
+  background: #090810;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  user-select: none;
 }
 
-/* Cinematic Fullscreen Backdrop & Multi-directional Vignette */
+/* Fullscreen Backdrop with Clean Transparent Vignette (No Harsh Backdrop Shadows) */
 .stremio-backdrop-container {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden;
-  pointer-events: none;
   z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .stremio-backdrop-image {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center top;
-  filter: brightness(1.05) contrast(1.02);
+  object-position: center 20%;
+  filter: brightness(0.7) saturate(1.1);
   transform: scale(1.01);
 }
 
 .stremio-backdrop-vignette {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   background: 
-    linear-gradient(to right, rgba(11, 9, 20, 0.92) 0%, rgba(11, 9, 20, 0.55) 35%, rgba(11, 9, 20, 0.15) 60%, rgba(11, 9, 20, 0.4) 100%),
-    linear-gradient(to top, rgba(11, 9, 20, 0.95) 0%, rgba(11, 9, 20, 0.25) 35%, transparent 70%),
-    linear-gradient(to bottom, rgba(11, 9, 20, 0.5) 0%, transparent 15%);
+    linear-gradient(90deg, rgba(9, 8, 16, 0.92) 0%, rgba(9, 8, 16, 0.65) 42%, rgba(9, 8, 16, 0.15) 75%, rgba(9, 8, 16, 0.45) 100%),
+    linear-gradient(0deg, rgba(9, 8, 16, 0.95) 0%, rgba(9, 8, 16, 0.25) 30%, transparent 60%);
 }
 
-/* Floating Top Bar */
+/* Top Floating Nav Bar */
 .stremio-top-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 64px;
-  padding: 0 32px;
+  position: relative;
+  z-index: 30;
+  height: 58px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  z-index: 30;
-  pointer-events: auto;
+  padding: 0 32px;
 }
 
 .stremio-back-icon-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   border: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  outline: none;
+  box-shadow: none;
+  color: #e2e8f0;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.18s ease;
 }
 
 .stremio-back-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.16);
   transform: scale(1.06);
+  color: #ffffff;
 }
 
 .stremio-top-bar-actions {
@@ -5511,135 +5501,188 @@ body, html, #root {
 }
 
 .stremio-provider-tag {
-  background: rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  border: none;
-  color: #cbd5e1;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 6px 14px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 5px 12px;
   border-radius: 9999px;
-  letter-spacing: 0.3px;
 }
 
 /* Loading & Error States */
 .stremio-detail-loading,
 .stremio-detail-error {
+  position: relative;
+  z-index: 20;
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 16px;
-  z-index: 10;
-  color: #ffffff;
+  color: #94a3b8;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .stremio-loading-spinner {
   width: 44px;
   height: 44px;
-  border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, 0.1);
   border-top-color: #8b5cf6;
+  border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
-.stremio-retry-btn {
-  background: #7c3aed;
+.stremio-detail-error h2 {
   color: #ffffff;
+  margin: 0;
+  font-size: 22px;
+}
+
+.stremio-retry-btn {
+  background: #8b5cf6;
+  color: #fff;
   border: none;
   border-radius: 9999px;
   padding: 10px 24px;
   font-weight: 600;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-/* Main Split View Layout */
-.stremio-detail-split-view {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
-  gap: 56px;
-  padding: 72px 56px 36px 56px;
-  height: 100vh;
-  box-sizing: border-box;
+.stremio-retry-btn:hover {
+  background: #7c3aed;
+}
+
+/* ==========================================================================
+   MAIN DETAIL LAYOUTS: MOVIE-MODE & SERIES-MODE
+   ========================================================================== */
+
+.stremio-detail-layout {
   position: relative;
   z-index: 10;
-  max-width: 1780px;
-  margin: 0 auto;
+  flex: 1;
+  max-width: 1720px;
   width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* Series Mode: Split 2-Column Grid */
+.stremio-detail-layout.series-mode {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 48px;
+  padding: 16px 48px 32px 48px;
+  height: calc(100vh - 58px);
+  overflow: hidden;
 }
 
 @media (max-width: 1200px) {
-  .stremio-detail-split-view {
+  .stremio-detail-layout.series-mode {
     grid-template-columns: 1fr 1fr;
-    gap: 36px;
-    padding: 72px 32px 28px 32px;
+    gap: 32px;
+    padding: 16px 32px 24px 32px;
   }
 }
 
-/* Left Info Panel */
+/* Movie Mode: Full Width Hero Flow */
+.stremio-detail-layout.movie-mode {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 24px 56px 36px 56px;
+  height: calc(100vh - 58px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.stremio-detail-layout.movie-mode::-webkit-scrollbar {
+  display: none;
+}
+
+/* Movie Hero Section */
+.stremio-movie-hero-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 740px;
+  z-index: 10;
+}
+
+/* Left Info Panel (Series Mode) */
 .stremio-left-info-panel {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  padding-bottom: 28px;
-  max-width: 680px;
+  padding-bottom: 12px;
+  max-width: 660px;
   z-index: 10;
+  gap: 15px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.stremio-left-info-panel::-webkit-scrollbar {
+  display: none;
 }
 
 /* Stylized Title - Modern Cinema Typography */
 .stremio-media-title {
   font-family: var(--font-display, 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
-  font-size: clamp(34px, 3.8vw, 54px);
+  font-size: clamp(34px, 4vw, 54px);
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.12;
   text-transform: none;
   color: #ffffff;
-  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
-  margin: 0 0 14px 0;
-  letter-spacing: -0.5px;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.85);
+  margin: 0;
+  letter-spacing: -0.02em;
 }
 
 .stremio-alt-title {
   font-family: var(--font-body, 'Inter', sans-serif);
   font-size: 14px;
   font-weight: 500;
-  color: #9d98b8;
+  color: #a1a1aa;
   margin-top: -6px;
-  margin-bottom: 16px;
 }
 
-/* Meta Row (Duration, Year, Rating, IMDb badge) */
+/* Meta Row (Type, Year, Duration, Rating, IMDb badge, Status) */
 .stremio-meta-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 20px;
-  font-size: 14px;
+  gap: 10px;
+  font-size: 13.5px;
   font-weight: 600;
-  color: #ffffff;
+  color: #e2e8f0;
   flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .stremio-meta-val {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  letter-spacing: -0.1px;
+  gap: 5px;
+  color: #e2e8f0;
 }
 
 .stremio-imdb-badge {
   background: #f5c518;
   color: #000000;
   font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 900;
-  padding: 1.5px 5px;
+  padding: 2px 5px;
   border-radius: 4px;
   border: none;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.3px;
   line-height: 1.2;
 }
 
@@ -5656,8 +5699,8 @@ body, html, #root {
 }
 
 .stremio-meta-badge.type-badge {
-  background: rgba(124, 58, 237, 0.18);
-  color: #c084fc;
+  background: rgba(124, 58, 237, 0.22);
+  color: #c4b5fd;
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 0.5px;
@@ -5671,13 +5714,13 @@ body, html, #root {
 }
 
 .stremio-meta-badge.status-badge.ongoing {
-  background: rgba(16, 185, 129, 0.16);
+  background: rgba(16, 185, 129, 0.18);
   color: #34d399;
 }
 
 .stremio-meta-badge.status-badge.completed {
-  background: rgba(148, 163, 184, 0.16);
-  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
 }
 
 .status-live-dot {
@@ -5708,14 +5751,8 @@ body, html, #root {
 
 .stremio-meta-val.ep-duration-val {
   color: #94a3b8;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.stremio-meta-badge.anime-badge {
-  background: rgba(139, 92, 246, 0.25);
-  border: none;
-  color: #c4b5fd;
+  font-size: 13.5px;
+  font-weight: 500;
 }
 
 /* Next Airing Alert Banner */
@@ -5730,78 +5767,16 @@ body, html, #root {
   font-size: 12px;
   font-weight: 700;
   color: #fbbf24;
-  margin-bottom: 16px;
   align-self: flex-start;
-}
-
-.pulse-icon {
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-/* Sections: GENRES, CAST, SUMMARY */
-.stremio-info-section {
-  margin-bottom: 16px;
-}
-
-.stremio-info-section.summary-section {
-  margin-bottom: 22px;
-}
-
-.stremio-section-label {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: 11px;
-  font-weight: 700;
-  color: #8e89b4;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-
-.stremio-chips-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/* Transparent Borderless Pill Chips */
-.stremio-pill-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 14px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.06);
-  border: none;
-  color: #e2e8f0;
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: default;
-  transition: all 0.18s ease;
-}
-
-.stremio-pill-chip:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
-}
-
-.stremio-summary-text {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: 14px;
-  line-height: 1.65;
-  color: #d1d5db;
-  font-weight: 400;
-  margin: 0;
-  max-height: 90px;
-  overflow-y: auto;
-  padding-right: 6px;
 }
 
 /* Action Buttons Bar - Pure Transparent Borderless */
 .stremio-actions-bar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 /* Play CTA Button */
@@ -5813,7 +5788,8 @@ body, html, #root {
   border-radius: 9999px;
   background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   border: none;
-  box-shadow: 0 8px 24px rgba(109, 40, 217, 0.45);
+  outline: none;
+  box-shadow: none;
   color: #ffffff;
   font-size: 14px;
   font-weight: 700;
@@ -5825,7 +5801,8 @@ body, html, #root {
 
 .stremio-action-play-btn:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 12px 32px rgba(109, 40, 217, 0.6);
+  filter: brightness(1.1);
+  box-shadow: none;
 }
 
 .stremio-action-play-btn:disabled {
@@ -5841,83 +5818,47 @@ body, html, #root {
   background: #34d399;
 }
 
-/* Trailer Button - Transparent Borderless Capsule */
+/* Trailer Button */
 .stremio-action-trailer-btn {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 12px 24px;
+  gap: 8px;
+  padding: 11px 22px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
   border: none;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  outline: none;
+  box-shadow: none;
   color: #ffffff;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .stremio-action-trailer-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.15);
   transform: translateY(-2px);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
 }
 
-/* Grouped Library & Watched Capsule - Transparent Borderless */
-.stremio-action-capsule-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 6px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
-  border: none;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-}
-
-.stremio-capsule-icon-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: #cbd5e1;
-  cursor: pointer;
-  transition: all 0.18s ease;
-}
-
-.stremio-capsule-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-}
-
-.stremio-capsule-icon-btn.active {
-  color: #34d399;
-  background: rgba(16, 185, 129, 0.18);
-}
-
-/* Circular Action Buttons (Bookmark, Share) - Transparent Borderless */
+/* Circular Action Buttons (Bookmark, Share) */
 .stremio-action-circle-btn,
 .stremio-action-share-btn {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
   border: none;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  outline: none;
+  box-shadow: none;
   color: #ffffff;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -5925,9 +5866,9 @@ body, html, #root {
 
 .stremio-action-circle-btn:hover,
 .stremio-action-share-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.15);
   transform: translateY(-2px);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
 }
 
 .stremio-action-circle-btn.active {
@@ -5935,7 +5876,7 @@ body, html, #root {
   background: rgba(16, 185, 129, 0.2);
 }
 
-/* Dropdown Menu Wrapper & Popup */
+/* Watchlist Dropdown */
 .stremio-dropdown-wrapper {
   position: relative;
 }
@@ -5946,13 +5887,14 @@ body, html, #root {
   left: 50%;
   transform: translateX(-50%);
   min-width: 190px;
-  background: rgba(17, 14, 30, 0.92);
+  background: rgba(17, 14, 30, 0.96);
   -webkit-backdrop-filter: blur(32px) saturate(190%);
   backdrop-filter: blur(32px) saturate(190%);
   border: none;
+  outline: none;
+  box-shadow: none;
   border-radius: 16px;
   padding: 8px;
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7);
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -5977,6 +5919,7 @@ body, html, #root {
   border-radius: 8px;
   background: transparent;
   border: none;
+  outline: none;
   color: #e2e8f0;
   font-size: 13px;
   font-weight: 500;
@@ -6010,7 +5953,192 @@ body, html, #root {
 }
 
 /* ==========================================================================
-   RIGHT PANEL: TRANSPARENT BORDERLESS CONTAINER & EPISODE CARDS
+   PLOT SYNOPSIS, GENRES & CAST
+   ========================================================================== */
+
+.stremio-summary-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.stremio-summary-text {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: #d1d5db;
+  font-weight: 400;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.stremio-summary-text.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  padding-right: 6px;
+}
+
+.stremio-summary-toggle {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #a78bfa;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  align-self: flex-start;
+  transition: color 0.15s ease;
+}
+
+.stremio-summary-toggle:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+/* Genres Tag Chips */
+.stremio-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.stremio-pill-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 13px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  outline: none;
+  box-shadow: none;
+  color: #e2e8f0;
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+  transition: all 0.15s ease;
+}
+
+.stremio-pill-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* Starring Cast Row */
+.stremio-cast-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: #a1a1aa;
+  margin-top: 2px;
+}
+
+.stremio-cast-label {
+  font-weight: 600;
+  color: #71717a;
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+
+.stremio-cast-names {
+  color: #d1d5db;
+  font-weight: 400;
+}
+
+/* ==========================================================================
+   MOVIE RECOMMENDATIONS SHELF (HORIZONTAL SHELF AT BOTTOM)
+   ========================================================================== */
+
+.stremio-movie-recs-shelf {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.stremio-shelf-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+}
+
+.stremio-shelf-scroll-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+}
+
+.stremio-shelf-scroll-row::-webkit-scrollbar {
+  display: none;
+}
+
+.stremio-shelf-card {
+  flex: 0 0 130px;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.stremio-shelf-card:hover {
+  transform: translateY(-4px);
+}
+
+.stremio-shelf-poster-wrapper {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+  border: none;
+  outline: none;
+}
+
+.stremio-shelf-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.stremio-shelf-card-info {
+  margin-top: 6px;
+}
+
+.stremio-shelf-card-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stremio-shelf-card-year {
+  font-size: 11px;
+  color: #71717a;
+  margin-top: 2px;
+}
+
+/* ==========================================================================
+   RIGHT PANEL: EPISODES CARD CONTAINER & ITEMS (SERIES MODE)
    ========================================================================== */
 
 .stremio-right-episodes-panel {
@@ -6018,15 +6146,16 @@ body, html, #root {
   -webkit-backdrop-filter: blur(44px) saturate(190%);
   backdrop-filter: blur(44px) saturate(190%);
   border: none;
+  outline: none;
+  box-shadow: none;
   border-radius: 20px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  height: calc(100vh - 110px);
+  height: calc(100vh - 100px);
   max-height: 840px;
   align-self: flex-end;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   z-index: 10;
 }
 
@@ -6035,7 +6164,7 @@ body, html, #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px 14px 24px;
+  padding: 18px 24px 12px 24px;
 }
 
 .season-nav-btn {
@@ -6044,6 +6173,7 @@ body, html, #root {
   gap: 5px;
   background: transparent;
   border: none;
+  outline: none;
   color: #8b86a8;
   font-size: 14px;
   font-weight: 600;
@@ -6073,8 +6203,9 @@ body, html, #root {
   gap: 8px;
   background: transparent;
   border: none;
+  outline: none;
   color: #ffffff;
-  font-size: 15.5px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   padding: 6px 12px;
@@ -6094,13 +6225,14 @@ body, html, #root {
   min-width: 200px;
   max-height: 280px;
   overflow-y: auto;
-  background: rgba(22, 19, 36, 0.88);
+  background: rgba(22, 19, 36, 0.94);
   -webkit-backdrop-filter: blur(36px) saturate(180%);
   backdrop-filter: blur(36px) saturate(180%);
   border: none;
+  outline: none;
+  box-shadow: none;
   border-radius: 14px;
   padding: 6px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -6116,6 +6248,7 @@ body, html, #root {
   border-radius: 9999px;
   background: transparent;
   border: none;
+  outline: none;
   color: #cbd5e1;
   font-size: 13px;
   font-weight: 500;
@@ -6148,6 +6281,8 @@ body, html, #root {
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.06);
   border: none;
+  outline: none;
+  box-shadow: none;
   color: #94a3b8;
   font-size: 12px;
   font-weight: 600;
@@ -6165,15 +6300,17 @@ body, html, #root {
   color: #ffffff;
 }
 
-/* Search Videos Input Pill - Transparent Borderless */
+/* Search Videos Input Pill */
 .stremio-videos-search-box {
   margin: 0 24px 14px 24px;
   background: rgba(255, 255, 255, 0.06);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
   border: none;
+  outline: none;
+  box-shadow: none;
   border-radius: 9999px;
-  padding: 9px 18px;
+  padding: 8px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6184,6 +6321,7 @@ body, html, #root {
   background: transparent;
   border: none;
   outline: none;
+  box-shadow: none;
   width: 100%;
   color: #ffffff;
   font-size: 13.5px;
@@ -6202,6 +6340,7 @@ body, html, #root {
 .search-clear-btn {
   background: transparent;
   border: none;
+  outline: none;
   color: #94a3b8;
   cursor: pointer;
   display: flex;
@@ -6214,13 +6353,13 @@ body, html, #root {
 .stremio-episodes-list-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 6px 18px 24px 18px;
+  padding: 4px 18px 24px 18px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-/* Episode Item (Card Block) - Pure Borderless */
+/* Episode Item (Card Block) */
 .stremio-episode-item {
   display: flex;
   align-items: center;
@@ -6229,6 +6368,8 @@ body, html, #root {
   border-radius: 12px;
   background: transparent;
   border: none;
+  outline: none;
+  box-shadow: none;
   cursor: pointer;
   user-select: none;
   transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
@@ -6254,7 +6395,9 @@ body, html, #root {
   overflow: hidden;
   background: #141126;
   flex-shrink: 0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: none;
+  border: none;
+  outline: none;
 }
 
 .stremio-ep-thumb {
@@ -6303,7 +6446,9 @@ body, html, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow: none;
+  border: none;
+  outline: none;
 }
 
 .stremio-ep-progress-bar {
@@ -6320,7 +6465,7 @@ body, html, #root {
   background: #8b5cf6;
 }
 
-/* Episode Meta (Title & Release Date) */
+/* Episode Meta */
 .stremio-ep-meta {
   display: flex;
   flex-direction: column;
@@ -6357,64 +6502,11 @@ body, html, #root {
   text-overflow: ellipsis;
 }
 
-.stremio-no-episodes,
-.stremio-no-recs {
+.stremio-no-episodes {
   padding: 48px 20px;
   text-align: center;
   color: #7b7596;
   font-size: 14px;
-}
-
-/* Movie Right Panel (Recommendations) */
-.stremio-movie-right-panel {
-  padding: 20px 24px;
-  overflow-y: auto;
-}
-
-.movie-panel-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #ffffff;
-  margin-bottom: 16px;
-}
-
-.stremio-movie-recs-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.stremio-movie-rec-card {
-  cursor: pointer;
-  transition: transform 0.18s ease;
-}
-
-.stremio-movie-rec-card:hover {
-  transform: translateY(-4px);
-}
-
-.movie-rec-poster {
-  width: 100%;
-  aspect-ratio: 2 / 3;
-  border-radius: 8px;
-  object-fit: cover;
-  background: #141126;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-}
-
-.movie-rec-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #e2e8f0;
-  margin-top: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.movie-rec-year {
-  font-size: 11px;
-  color: #7b7596;
 }
 
 /* Trailer Video Modal */
