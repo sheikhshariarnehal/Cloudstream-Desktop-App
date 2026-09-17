@@ -190,8 +190,37 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           setActiveDub(availableDubs[0]);
         }
 
-        const firstSeason = res.episodes[0].season || 1;
-        setSelectedSeason(firstSeason);
+        // Determine initial season:
+        // 1. Check if a season was previously selected in this session
+        // 2. Check if watch history indicates a recently watched season
+        // 3. Default to the first available season
+        const availableSeasons = Array.from(
+          new Set(res.episodes.map((e) => e.season || 1))
+        );
+        let targetSeason = res.episodes[0].season || 1;
+
+        try {
+          const savedSeasonStr = sessionStorage.getItem(`cloudstream_detail_season_${item.url}`);
+          const savedSeason = savedSeasonStr ? parseInt(savedSeasonStr, 10) : NaN;
+          if (!isNaN(savedSeason) && availableSeasons.includes(savedSeason)) {
+            targetSeason = savedSeason;
+          } else {
+            const currentMediaTitle = (res.name || item.name || '').trim().toLowerCase();
+            const combinedHist = [...history, ...fullHistory].filter((h) => {
+              return (
+                h.media_id === item.url ||
+                h.media_id === (res.url || '') ||
+                (h.title && currentMediaTitle && h.title.trim().toLowerCase() === currentMediaTitle)
+              );
+            }).sort((a, b) => (b.last_watched_at || 0) - (a.last_watched_at || 0));
+            const historySeason = combinedHist[0]?.season_num;
+            if (historySeason && availableSeasons.includes(historySeason)) {
+              targetSeason = historySeason;
+            }
+          }
+        } catch {}
+
+        setSelectedSeason(targetSeason);
       }
     } catch (err) {
       console.error('Failed to load media details:', err);
@@ -236,6 +265,22 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     };
   }, []);
 
+  // Sync selected season to session storage for seamless return from player
+  useEffect(() => {
+    if (selectedSeason) {
+      try {
+        sessionStorage.setItem(`cloudstream_detail_season_${item.url}`, String(selectedSeason));
+      } catch {}
+    }
+  }, [selectedSeason, item.url]);
+
+  const handleModalClose = useCallback(() => {
+    try {
+      sessionStorage.removeItem(`cloudstream_detail_season_${item.url}`);
+    } catch {}
+    onClose();
+  }, [item.url, onClose]);
+
   // Keyboard Escape Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -243,13 +288,13 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         if (activeTrailerUrl) {
           setActiveTrailerUrl(null);
         } else {
-          onClose();
+          handleModalClose();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, activeTrailerUrl]);
+  }, [handleModalClose, activeTrailerUrl]);
 
   // Find downloaded item matching an episode
   const getDownloadedItemForEpisode = useCallback(
@@ -957,7 +1002,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       <div className="stremio-top-bar">
         <button
           className="stremio-back-icon-btn"
-          onClick={onClose}
+          onClick={handleModalClose}
           title="Back (Esc)"
         >
           <ChevronLeft size={26} />

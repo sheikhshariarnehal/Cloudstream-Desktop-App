@@ -299,9 +299,18 @@ async fn get_home_catalog(
     if page_num == 1 {
         if let Ok(history) = state.db.get_watch_history(20) {
             if !history.is_empty() {
+                let mut seen = std::collections::HashSet::new();
                 let continue_items: Vec<SearchResponse> = history
                     .into_iter()
                     .filter(|h| !h.is_completed && h.position_ms > 10000)
+                    .filter(|h| {
+                        let key = if !h.media_id.is_empty() {
+                            h.media_id.to_lowercase()
+                        } else {
+                            h.title.to_lowercase()
+                        };
+                        seen.insert(key)
+                    })
                     .map(|h| SearchResponse {
                         name: if let Some(ep) = h.episode_num {
                             format!("{} (S{}E{})", h.title, h.season_num.unwrap_or(1), ep)

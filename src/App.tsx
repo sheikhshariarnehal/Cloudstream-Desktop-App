@@ -279,6 +279,7 @@ export const App: React.FC = () => {
 
   // Modal & Player
   const [selectedItem, setSelectedItem] = useState<SearchResponse | null>(null);
+  const [itemHistoryStack, setItemHistoryStack] = useState<SearchResponse[]>([]);
   const [playerState, setPlayerState] = useState<{
     item: SearchResponse;
     episode: Episode;
@@ -479,10 +480,23 @@ export const App: React.FC = () => {
         url: media.url,
       });
 
-      const hist = history.find((h) => h.media_id === media.url);
+      const hist = history.find(
+        (h) =>
+          h.media_id === media.url ||
+          (h.title && media.name && h.title.trim().toLowerCase() === media.name.trim().toLowerCase())
+      );
       let targetEp: Episode | undefined;
       if (hist && hist.episode_num && details.episodes) {
-        targetEp = details.episodes.find((ep: Episode) => ep.episode === hist.episode_num);
+        if (hist.is_completed) {
+          const nextEp = details.episodes.find(
+            (ep: Episode) =>
+              (ep.season || 1) === (hist.season_num || 1) &&
+              ep.episode === (hist.episode_num || 0) + 1
+          );
+          targetEp = nextEp || details.episodes.find((ep: Episode) => ep.episode === hist.episode_num);
+        } else {
+          targetEp = details.episodes.find((ep: Episode) => ep.episode === hist.episode_num);
+        }
       }
       if (!targetEp && details.episodes && details.episodes.length > 0) {
         targetEp = details.episodes[0];
@@ -773,30 +787,75 @@ export const App: React.FC = () => {
     }
   }, [activeTab]);
 
-  // Continue Watching items computed from history
-  const continueWatchingItems: SearchResponse[] = React.useMemo(() => history
-    .filter((h) => !h.is_completed && h.position_ms > 10000)
-    .map((h) => ({
-      name: h.title,
-      url: h.media_id,
-      api_name: h.provider_id,
-      // Use actual tv_type from DB, fall back to Movie only if unknown
-      tv_type: (h.tv_type as any) || 'Movie',
-      poster_url: h.poster_url,
-      // Don't force season=1 for movies — leave undefined so no S1:E1 badge
-      season: h.tv_type === 'Movie' ? undefined : (h.season_num ?? undefined),
-      episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
-      latest_episode: h.tv_type === 'Movie' ? undefined : (h.episode_num ?? undefined),
-    })), [history]);
+  // Continue Watching items computed from history - deduplicated by media series
+  const continueWatchingItems: SearchResponse[] = React.useMemo(() => {
+    const seenMedia = new Set<string>();
+    const seenTitles = new Set<string>();
+    const items: SearchResponse[] = [];
+
+    for (const h of history) {
+      if (h.is_completed || h.position_ms <= 10000) continue;
+
+      const mediaKey = (h.media_id || '').trim().toLowerCase();
+      const titleKey = (h.title || '').trim().toLowerCase();
+      if (!mediaKey && !titleKey) continue;
+
+      if ((mediaKey && seenMedia.has(mediaKey)) || (titleKey && seenTitles.has(titleKey))) {
+        continue;
+      }
+      if (mediaKey) seenMedia.add(mediaKey);
+      if (titleKey) seenTitles.add(titleKey);
+
+      items.push({
+        name: h.title,
+        url: h.media_id,
+        api_name: h.provider_id,
+        tv_type: (h.tv_type as any) || (h.episode_num ? 'TvSeries' : 'Movie'),
+        poster_url: h.poster_url,
+        season: h.season_num ?? undefined,
+        episode: h.episode_num ?? undefined,
+        latest_episode: h.episode_num ?? undefined,
+      });
+    }
+
+    return items;
+  }, [history]);
 
   const historyProgressMap: Record<string, number> = React.useMemo(() => {
     const map: Record<string, number> = {};
-    history.forEach((h) => {
+    const seen = new Set<string>();
+
+    for (const h of history) {
+      const key = h.media_id;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+
       if (h.duration_ms > 0) {
-        map[h.media_id] = (h.position_ms / h.duration_ms) * 100;
+        map[key] = (h.position_ms / h.duration_ms) * 100;
       }
-    });
+    }
     return map;
+  }, [history]);
+
+  const uniqueHistory: WatchHistoryItem[] = React.useMemo(() => {
+    const seenMedia = new Set<string>();
+    const seenTitles = new Set<string>();
+    const list: WatchHistoryItem[] = [];
+
+    for (const h of history) {
+      const mediaKey = (h.media_id || '').trim().toLowerCase();
+      const titleKey = (h.title || '').trim().toLowerCase();
+      if (!mediaKey && !titleKey) continue;
+
+      if ((mediaKey && seenMedia.has(mediaKey)) || (titleKey && seenTitles.has(titleKey))) {
+        continue;
+      }
+      if (mediaKey) seenMedia.add(mediaKey);
+      if (titleKey) seenTitles.add(titleKey);
+
+      list.push(h);
+    }
+    return list;
   }, [history]);
 
   // Filtered Bookmarks on Home
@@ -1709,7 +1768,7 @@ export const App: React.FC = () => {
                   onClick={() => setLibraryTab('history')}
                 >
                   <Film size={14} />
-                  Continue Watching ({history.length})
+                  Continue Watching ({uniqueHistory.length})
                 </button>
               </div>
 
@@ -1739,22 +1798,24 @@ export const App: React.FC = () => {
                     ))}
                   </div>
                 )
-              ) : history.length === 0 ? (
+              ) : uniqueHistory.length === 0 ? (
                 <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
                   <Film size={40} color="#64748b" style={{ margin: '0 auto 12px' }} />
                   <div style={{ fontSize: '16px', fontWeight: 600, color: '#fff' }}>No Watch History</div>
                 </div>
               ) : (
                 <div className="stremio-shelf-grid">
-                  {history.map((h) => (
+                  {uniqueHistory.map((h) => (
                     <MediaCard
-                      key={h.media_id}
+                      key={h.media_id || h.title}
                       item={{
                         name: h.title,
                         url: h.media_id,
                         api_name: h.provider_id,
-                        tv_type: 'Movie',
+                        tv_type: (h.tv_type as any) || (h.episode_num ? 'TvSeries' : 'Movie'),
                         poster_url: h.poster_url,
+                        season: h.season_num ?? undefined,
+                        episode: h.episode_num ?? undefined,
                         latest_episode: h.episode_num,
                       }}
                       isContinueWatching={true}
@@ -1816,8 +1877,15 @@ export const App: React.FC = () => {
           <DetailModal
             item={selectedItem}
             onClose={() => {
-              setSelectedItem(null);
-              loadLibraryData();
+              if (itemHistoryStack.length > 0) {
+                const prevItem = itemHistoryStack[itemHistoryStack.length - 1];
+                setItemHistoryStack((prev) => prev.slice(0, -1));
+                setSelectedItem(prevItem);
+              } else {
+                setItemHistoryStack([]);
+                setSelectedItem(null);
+                loadLibraryData();
+              }
             }}
             onPlay={(
               item: SearchResponse,
@@ -1827,10 +1895,13 @@ export const App: React.FC = () => {
               mediaDetails?: LoadResponse,
               startTime?: number
             ) => {
-              setSelectedItem(null);
+              setSelectedItem(item);
               setPlayerState({ item, episode, links, allEpisodes, mediaDetails, startTime });
             }}
             onSelectItem={(newItem: SearchResponse) => {
+              if (selectedItem) {
+                setItemHistoryStack((prev) => [...prev, selectedItem]);
+              }
               setSelectedItem(newItem);
             }}
           />
@@ -1869,7 +1940,14 @@ export const App: React.FC = () => {
               onPlayItem={handleQuickPlay}
               onRemoveItem={
                 expandedShelf.actionType === 'continue_watching'
-                  ? handleRemoveHistoryItem
+                  ? async (media) => {
+                      await handleRemoveHistoryItem(media);
+                      setExpandedShelf((prev) =>
+                        prev
+                          ? { ...prev, items: prev.items.filter((it) => it.url !== media.url) }
+                          : null
+                      );
+                    }
                   : undefined
               }
             />

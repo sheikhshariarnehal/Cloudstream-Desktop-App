@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React from 'react';
 import { SearchResponse } from '../types';
-import { Play, X, Star, MoreVertical, Trash2, Info } from 'lucide-react';
+import { Play, X, Star } from 'lucide-react';
 
 interface MediaCardProps {
   item: SearchResponse;
@@ -25,19 +25,6 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   isHorizontal = false,
   isContinueWatching,
 }) => {
-  const [showMenu, setShowMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showMenu) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMenu]);
 
   // Determine if this is treated as a Continue Watching item
   const isCW = Boolean(
@@ -182,69 +169,11 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
         )}
       </div>
 
-      {/* Card Info & Title with 3-Dots Menu (only on Continue Watching) */}
-      <div className={`cw-card-info-row ${!isCW ? 'catalog-card' : ''}`}>
+      {/* Card Info & Title */}
+      <div className="cw-card-info-row catalog-card">
         <div className="cw-card-title-centered" title={item.name}>
           {item.name}
         </div>
-
-        {isCW && (
-          <div className={`cw-card-menu-anchor ${showMenu ? 'open' : ''}`} ref={menuRef}>
-            <button
-              type="button"
-              className="cw-card-more-btn"
-              title="More options"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu((prev) => !prev);
-              }}
-            >
-              <MoreVertical size={15} />
-            </button>
-
-            {showMenu && (
-              <div className="cw-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-                {onPlay && (
-                  <button
-                    type="button"
-                    className="cw-dropdown-item"
-                    onClick={(e) => {
-                      setShowMenu(false);
-                      onPlay(item, e);
-                    }}
-                  >
-                    <Play size={13} fill="currentColor" />
-                    <span>Resume Playing</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="cw-dropdown-item"
-                  onClick={() => {
-                    setShowMenu(false);
-                    onClick(item);
-                  }}
-                >
-                  <Info size={13} />
-                  <span>View Details</span>
-                </button>
-                {onRemove && (
-                  <button
-                    type="button"
-                    className="cw-dropdown-item danger"
-                    onClick={(e) => {
-                      setShowMenu(false);
-                      onRemove(item, e);
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    <span>Remove from History</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {subtitle && <div className="stremio-card-sub-centered">{subtitle}</div>}

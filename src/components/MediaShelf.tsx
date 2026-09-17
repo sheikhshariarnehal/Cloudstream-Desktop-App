@@ -50,13 +50,7 @@ const MediaShelfComponent: React.FC<MediaShelfProps> = ({
     <div className="media-shelf-container">
       {/* Shelf Header with Title & Navigation Arrows */}
       <div className="media-shelf-header">
-        <div
-          className={`media-shelf-title-left ${onSeeAll ? 'clickable' : ''}`}
-          onClick={onSeeAll}
-          role={onSeeAll ? 'button' : undefined}
-          tabIndex={onSeeAll ? 0 : undefined}
-          title={onSeeAll ? `View all from ${title}` : undefined}
-        >
+        <div className="media-shelf-title-left">
           {iconUrl ? (
             <img
               src={iconUrl}
@@ -72,17 +66,6 @@ const MediaShelfComponent: React.FC<MediaShelfProps> = ({
         </div>
 
         <div className="media-shelf-nav">
-          {onSeeAll && (
-            <button
-              type="button"
-              className="media-shelf-see-all-btn"
-              onClick={onSeeAll}
-              title={`View all from ${title}`}
-            >
-              <span>See All</span>
-              <ArrowRight size={13} />
-            </button>
-          )}
 
           {/* Circular Left Navigation Arrow (Desktop horizontal scroll) */}
           <button
