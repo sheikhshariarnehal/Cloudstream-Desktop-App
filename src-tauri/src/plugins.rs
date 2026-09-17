@@ -22,6 +22,7 @@ impl PluginManager {
         Self {
             client: Client::builder()
                 .danger_accept_invalid_certs(true)
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) CloudStream-Desktop/6.0.1")
                 .build()
                 .unwrap(),
             plugins_dir,
@@ -56,13 +57,97 @@ impl PluginManager {
         clean
     }
 
+    pub fn get_repo_candidates(clean_url: &str) -> Vec<String> {
+        let mut candidates = Vec::new();
+        candidates.push(clean_url.to_string());
+
+        let manifest_names = ["repo.json", "CNC.json", "plugins.json", "CS.json", "Netflix.json"];
+        for name in &manifest_names {
+            for target in &manifest_names {
+                if name != target && clean_url.ends_with(name) {
+                    candidates.push(format!("{}{}", &clean_url[..clean_url.len() - name.len()], target));
+                }
+            }
+        }
+
+        let mut branch_variations = Vec::new();
+        for c in &candidates {
+            if c.contains("/master/") {
+                branch_variations.push(c.replace("/master/", "/builds/"));
+                branch_variations.push(c.replace("/master/", "/refs/heads/builds/"));
+                branch_variations.push(c.replace("/master/", "/main/"));
+            }
+            if c.contains("/refs/heads/builds/") {
+                branch_variations.push(c.replace("/refs/heads/builds/", "/builds/"));
+                branch_variations.push(c.replace("/refs/heads/builds/", "/master/"));
+            }
+            if c.contains("/builds/") {
+                branch_variations.push(c.replace("/builds/", "/refs/heads/builds/"));
+                branch_variations.push(c.replace("/builds/", "/master/"));
+            }
+            if c.contains("/main/") {
+                branch_variations.push(c.replace("/main/", "/builds/"));
+                branch_variations.push(c.replace("/main/", "/master/"));
+            }
+        }
+        candidates.extend(branch_variations);
+
+        if !clean_url.ends_with(".json") && !clean_url.ends_with("/repo") {
+            let base = clean_url.trim_end_matches('/');
+            for target in &manifest_names {
+                candidates.push(format!("{}/{}", base, target));
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|c| seen.insert(c.clone()));
+
+        candidates
+    }
+
     pub async fn fetch_repository(&self, repo_url: &str) -> Result<RepositoryManifest> {
         let clean_url = Self::normalize_repo_url(repo_url);
-        let res = self.client.get(&clean_url).send().await?;
-        let text = res.text().await?;
+        let candidates = Self::get_repo_candidates(&clean_url);
 
-        let val: Value = serde_json::from_str(&text)
-            .map_err(|e| anyhow!("Failed to parse repo JSON from {}: {}", clean_url, e))?;
+        let mut successful_val: Option<(Value, String)> = None;
+        let mut last_error = String::new();
+
+        for cand in &candidates {
+            match self.client.get(cand).send().await {
+                Ok(res) => {
+                    let status = res.status();
+                    if !status.is_success() {
+                        last_error = format!("HTTP {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Error"));
+                        continue;
+                    }
+                    if let Ok(text) = res.text().await {
+                        let trimmed = text.trim();
+                        // Ignore HTML responses (e.g. GitHub error pages or repo homepages)
+                        if trimmed.starts_with('<') {
+                            last_error = "Server returned an HTML page instead of repository JSON".to_string();
+                            continue;
+                        }
+                        match serde_json::from_str::<Value>(trimmed) {
+                            Ok(val) => {
+                                println!("[PluginManager] Successfully loaded repository from: {}", cand);
+                                successful_val = Some((val, cand.clone()));
+                                break;
+                            }
+                            Err(e) => {
+                                last_error = format!("JSON parse error: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = format!("Network error: {}", e);
+                }
+            }
+        }
+
+        let (val, working_url) = successful_val.ok_or_else(|| {
+            anyhow!("Could not access repository at {}: {}", clean_url, last_error)
+        })?;
 
         let mut raw_plugin_values = Vec::new();
 
@@ -78,10 +163,12 @@ impl PluginManager {
                     let normalized_list_url = Self::normalize_repo_url(list_url);
                     println!("[PluginManager] Fetching plugin list from: {}", normalized_list_url);
                     if let Ok(resp) = self.client.get(&normalized_list_url).send().await {
-                        if let Ok(sub_text) = resp.text().await {
-                            if let Ok(sub_val) = serde_json::from_str::<Value>(&sub_text) {
-                                if let Some(sub_arr) = sub_val.as_array() {
-                                    raw_plugin_values.extend(sub_arr.clone());
+                        if resp.status().is_success() {
+                            if let Ok(sub_text) = resp.text().await {
+                                if let Ok(sub_val) = serde_json::from_str::<Value>(&sub_text) {
+                                    if let Some(sub_arr) = sub_val.as_array() {
+                                        raw_plugin_values.extend(sub_arr.clone());
+                                    }
                                 }
                             }
                         }
@@ -100,7 +187,7 @@ impl PluginManager {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| {
-                clean_url
+                working_url
                     .split('/')
                     .filter(|s| !s.is_empty())
                     .last()
@@ -177,7 +264,7 @@ impl PluginManager {
                 icon_url,
                 authors,
                 description,
-                repository_url: Some(clean_url.to_string()),
+                repository_url: Some(working_url.clone()),
                 language,
                 file_size,
                 file_hash,
@@ -187,7 +274,7 @@ impl PluginManager {
 
         Ok(RepositoryManifest {
             name: repo_name,
-            url: clean_url.to_string(),
+            url: working_url,
             manifest_version: val.get("manifestVersion").and_then(|v| v.as_i64()).map(|v| v as i32),
             plugins,
         })

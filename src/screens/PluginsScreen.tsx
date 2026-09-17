@@ -472,8 +472,14 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
     return installedPlugins.some((p) => p.name.toLowerCase() === name.toLowerCase());
   };
 
-  const isRepoAdded = (url: string) => {
-    return repositories.some((r) => r.url.toLowerCase().trim() === url.toLowerCase().trim());
+  const isRepoAdded = (url: string, name?: string) => {
+    const clean = url.toLowerCase().trim();
+    return repositories.some((r) => {
+      const rUrl = r.url.toLowerCase().trim();
+      if (rUrl === clean) return true;
+      if (name && r.name.toLowerCase().trim() === name.toLowerCase().trim()) return true;
+      return false;
+    });
   };
 
   // Open external URL safely
@@ -1538,7 +1544,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                     }}
                   >
                     {filteredCatalogRepositories.map((repo) => {
-                      const added = isRepoAdded(repo.directInstall);
+                      const added = isRepoAdded(repo.directInstall, repo.name);
                       const isExpanded = expandedRepoPlugins[repo.id];
                       const pluginsToShow = isExpanded
                         ? repo.plugins || []
@@ -1774,7 +1780,9 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                               <button
                                 onClick={() => {
                                   const entry = repositories.find(
-                                    (r) => r.url.toLowerCase() === repo.directInstall.toLowerCase()
+                                    (r) =>
+                                      r.url.toLowerCase().trim() === repo.directInstall.toLowerCase().trim() ||
+                                      r.name.toLowerCase().trim() === repo.name.toLowerCase().trim()
                                   );
                                   if (entry) {
                                     setSelectedRepo(entry);

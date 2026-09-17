@@ -199,7 +199,7 @@ export const App: React.FC = () => {
     isRefreshing,
     setIsRefreshing,
     heroDetails,
-    expandingShelf,
+    expandingShelfName,
     loadHome,
     expandShelf,
   } = useHomeViewModel(selectedExtension);
@@ -1540,7 +1540,7 @@ export const App: React.FC = () => {
                           shelf={shelf}
                           displayTitle={displayTitle}
                           shelfItems={shelfItems}
-                          isLoadingMore={expandingShelf && expandedShelf?.shelfName === shelf.list.name}
+                          isLoadingMore={expandingShelfName === shelf.list.name}
                           onSelectItem={setSelectedItem}
                           onPlayItem={handleQuickPlay}
                           onExpandShelf={expandShelf}
@@ -1755,7 +1755,7 @@ export const App: React.FC = () => {
               actionType={expandedShelf.actionType}
               progressMap={historyProgressMap}
               hasNext={hasNext}
-              isLoadingMore={expandingShelf}
+              isLoadingMore={Boolean(expandingShelfName && expandingShelfName === expandedShelf.shelfName)}
               onLoadMore={
                 matchingShelf
                   ? () => expandShelf(matchingShelf.list.name)

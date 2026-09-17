@@ -370,6 +370,130 @@ async fn get_home_shelves(
     Ok(shelves)
 }
 
+async fn scrape_animedekho_category(shelf_name: &str, page: i32) -> Result<Vec<SearchResponse>, String> {
+    let lower = shelf_name.to_lowercase();
+    let slug = match lower.trim() {
+        "anime" => "anime",
+        "cartoon" => "cartoon",
+        "crunchyroll" => "crunchyroll",
+        "hindi" | "hindi dub" => "hindi-dub",
+        "tamil" => "tamil",
+        "telugu" => "telugu",
+        "action" => "action",
+        "fantasy" => "fantasy",
+        "shounen" => "shounen",
+        other => other,
+    };
+
+    let url = if page <= 1 {
+        format!("https://animedekho.app/category/{}/", slug)
+    } else {
+        format!("https://animedekho.app/category/{}/page/{}/", slug, page)
+    };
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let doc = scraper::Html::parse_document(&html);
+
+    let article_sel = scraper::Selector::parse("ul[data-results] li article, article.post").map_err(|e| format!("{:?}", e))?;
+    let title_sel = scraper::Selector::parse("h2.entry-title, h3.entry-title, .entry-title").map_err(|e| format!("{:?}", e))?;
+    let link_sel = scraper::Selector::parse("a.lnk-blk, header a, a[href*='/series-hindi/'], a[href*='/movie-hindi/'], a[href]").map_err(|e| format!("{:?}", e))?;
+    let img_sel = scraper::Selector::parse("figure img, img[src]").map_err(|e| format!("{:?}", e))?;
+    let year_sel = scraper::Selector::parse("span.year").map_err(|e| format!("{:?}", e))?;
+    let score_sel = scraper::Selector::parse("span.rating span").map_err(|e| format!("{:?}", e))?;
+    let quality_sel = scraper::Selector::parse("span.quality").map_err(|e| format!("{:?}", e))?;
+
+    let mut items = Vec::new();
+
+    for el in doc.select(&article_sel) {
+        let name = el.select(&title_sel).next()
+            .map(|t| t.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        if name.is_empty() {
+            continue;
+        }
+
+        let link_url = el.select(&link_sel).next()
+            .and_then(|a| a.value().attr("href"))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if link_url.is_empty() {
+            continue;
+        }
+
+        let poster_url = el.select(&img_sel).next().and_then(|img| {
+            img.value().attr("src")
+                .or_else(|| img.value().attr("data-src"))
+                .or_else(|| img.value().attr("data-lazy-src"))
+        }).map(|s| s.trim().to_string());
+
+        let year = el.select(&year_sel).next()
+            .and_then(|y| y.text().collect::<String>().trim().parse::<i32>().ok());
+
+        let score = el.select(&score_sel).next()
+            .and_then(|s| s.text().collect::<String>().trim().parse::<f64>().ok());
+
+        let quality = el.select(&quality_sel).next()
+            .map(|q| q.text().collect::<String>().trim().to_string());
+
+        // AnimeDekho requires Media JSON in the url field for detail loading
+        let media_json = serde_json::json!({
+            "url": link_url,
+            "poster": poster_url.as_deref().unwrap_or(""),
+            "mediaType": serde_json::Value::Null
+        }).to_string();
+
+        let tv_type = if link_url.contains("/movie-hindi/") {
+            crate::models::TvType::Movie
+        } else {
+            crate::models::TvType::Anime
+        };
+
+        let dub_status = if let Some(ref q) = quality {
+            let q_lower = q.to_lowercase();
+            if q_lower.contains("dub") {
+                Some(crate::models::DubStatus::Dubbed)
+            } else if q_lower.contains("sub") {
+                Some(crate::models::DubStatus::Subbed)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        items.push(SearchResponse {
+            name,
+            url: media_json,
+            api_name: "Anime Dekho".to_string(),
+            tv_type,
+            poster_url,
+            year,
+            score,
+            dub_status,
+            latest_episode: None,
+            quality,
+            season: None,
+            episode: None,
+        });
+    }
+
+    Ok(items)
+}
+
 /// CloudStream `expand(categoryName)` parity:
 /// Fetches the next page for a single shelf and returns only the new items.
 #[tauri::command]
@@ -381,6 +505,28 @@ async fn expand_shelf(
 ) -> Result<ExpandableShelf, String> {
     let resolved = resolve_provider_name(&state, provider).await;
     let provider_arg = resolved.as_deref();
+
+    let is_anime_dekho = provider_arg.map_or(false, |p| {
+        p.eq_ignore_ascii_case("Anime Dekho") || p.eq_ignore_ascii_case("AnimeDekhoProvider")
+    });
+
+    if is_anime_dekho && page > 1 {
+        if let Ok(items) = scrape_animedekho_category(&shelf_name, page).await {
+            if !items.is_empty() {
+                let has_next = items.len() >= 10;
+                return Ok(ExpandableShelf {
+                    list: HomePageList {
+                        name: shelf_name,
+                        list: items,
+                        is_horizontal: true,
+                    },
+                    current_page: page,
+                    has_next,
+                });
+            }
+        }
+    }
+
     let all_shelves = state.providers.get_home_page(provider_arg, page).await;
 
     // Find the shelf by name in the page-N response
@@ -1172,7 +1318,12 @@ async fn player_load(
     start_time: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.player.load(&url, title.as_deref(), headers, start_time)
+    let effective_url = if url.contains(".m3u8") || url.contains("/m3u8") || url.contains("m3u8=") {
+        state.proxy.get_proxied_url(&url, &headers.clone().unwrap_or_default())
+    } else {
+        url
+    };
+    state.player.load(&effective_url, title.as_deref(), headers, start_time)
 }
 
 #[tauri::command]

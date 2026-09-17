@@ -149,27 +149,81 @@ async fn handle_proxy_stream(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok(res)
     } else {
-        // Stream video binary chunks directly
-        let mut res_builder = Response::builder()
-            .status(status)
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::ACCEPT_RANGES, "bytes");
+        // Handle video binary segments / chunks
+        let is_segment_or_image = target_url_str.contains(".ts")
+            || target_url_str.contains(".png")
+            || target_url_str.contains(".jpg")
+            || target_url_str.contains(".jpeg")
+            || content_type.contains("image")
+            || content_type.contains("video/mp2t")
+            || upstream_res.content_length().map_or(true, |len| len < 35 * 1024 * 1024);
 
-        if let Some(ct) = upstream_res.headers().get(header::CONTENT_TYPE) {
-            res_builder = res_builder.header(header::CONTENT_TYPE, ct);
-        }
-        if let Some(cl) = upstream_res.headers().get(header::CONTENT_LENGTH) {
-            res_builder = res_builder.header(header::CONTENT_LENGTH, cl);
-        }
-        if let Some(cr) = upstream_res.headers().get(header::CONTENT_RANGE) {
-            res_builder = res_builder.header(header::CONTENT_RANGE, cr);
-        }
+        if is_segment_or_image {
+            let raw_bytes = upstream_res.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+            let len = raw_bytes.len();
 
-        let stream = upstream_res.bytes_stream();
-        let body = Body::from_stream(stream);
+            // Check for MPEG-TS sync pattern (0x47 repeating every 188 bytes)
+            // Some CDN services (e.g. Turbosplayer / Emturbovid) prepend a fake PNG header
+            // to bypass hotlink protection, causing native players like MPV/FFmpeg to fail.
+            let mut slice_offset = 0;
+            if len >= 188 * 3 {
+                let search_limit = std::cmp::min(len.saturating_sub(188 * 2), 4096);
+                for i in 0..search_limit {
+                    if raw_bytes[i] == 0x47
+                        && raw_bytes[i + 188] == 0x47
+                        && raw_bytes[i + 376] == 0x47
+                    {
+                        slice_offset = i;
+                        break;
+                    }
+                }
+            }
 
-        let response = res_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(response)
+            let is_video_ts = slice_offset > 0 || (len >= 188 && raw_bytes[0] == 0x47);
+            let final_bytes = if slice_offset > 0 {
+                raw_bytes.slice(slice_offset..)
+            } else {
+                raw_bytes
+            };
+
+            let mut res_builder = Response::builder()
+                .status(status)
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(header::ACCEPT_RANGES, "bytes");
+
+            if is_video_ts || content_type.contains("image") {
+                res_builder = res_builder.header(header::CONTENT_TYPE, "video/mp2t");
+            } else if !content_type.is_empty() {
+                res_builder = res_builder.header(header::CONTENT_TYPE, &content_type);
+            }
+
+            res_builder = res_builder.header(header::CONTENT_LENGTH, final_bytes.len().to_string());
+
+            let response = res_builder.body(Body::from(final_bytes)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            Ok(response)
+        } else {
+            // Large direct video stream (e.g. multi-gigabyte MP4/MKV)
+            let mut res_builder = Response::builder()
+                .status(status)
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(header::ACCEPT_RANGES, "bytes");
+
+            if let Some(ct) = upstream_res.headers().get(header::CONTENT_TYPE) {
+                res_builder = res_builder.header(header::CONTENT_TYPE, ct);
+            }
+            if let Some(cl) = upstream_res.headers().get(header::CONTENT_LENGTH) {
+                res_builder = res_builder.header(header::CONTENT_LENGTH, cl);
+            }
+            if let Some(cr) = upstream_res.headers().get(header::CONTENT_RANGE) {
+                res_builder = res_builder.header(header::CONTENT_RANGE, cr);
+            }
+
+            let stream = upstream_res.bytes_stream();
+            let body = Body::from_stream(stream);
+
+            let response = res_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            Ok(response)
+        }
     }
 }
 

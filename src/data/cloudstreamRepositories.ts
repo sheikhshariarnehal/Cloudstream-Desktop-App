@@ -78,7 +78,7 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "hexated",
       "hex"
     ],
-    "directInstall": "https://raw.githubusercontent.com/Hexated/cloudstream-extensions-hexated/master/repo.json",
+    "directInstall": "https://raw.githubusercontent.com/Hexated/cloudstream-extensions-hexated/builds/plugins.json",
     "webpage": "https://github.com/Hexated/cloudstream-extensions-hexated",
     "description": "Comprehensive global movie, series, and multi-host scraping providers maintained by Hexated.",
     "plugins": [
@@ -515,7 +515,7 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "dg",
       "464"
     ],
-    "directInstall": "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/master/repo.json",
+    "directInstall": "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/refs/heads/builds/repo.json",
     "webpage": "https://github.com/doGior/doGiorsHadEnough",
     "description": "Curated collection of high quality English scrapers and IPTV playlists.",
     "plugins": [
@@ -553,10 +553,11 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "english"
     ],
     "shortcodes": [
+      "cncv",
       "cnc",
       "262"
     ],
-    "directInstall": "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/refs/heads/builds/repo.json",
+    "directInstall": "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/refs/heads/builds/CNC.json",
     "webpage": "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension",
     "description": "South Indian cinema powerhouse: Malayalam, Tamil, Telugu, and Kannada sources.",
     "plugins": [
@@ -596,7 +597,7 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "diegon",
       "47"
     ],
-    "directInstall": "https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/master/repo.json",
+    "directInstall": "https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/builds/repo.json",
     "webpage": "https://github.com/DieGon7771/ItaliaInStreaming",
     "description": "The primary Italian streaming repository with Italian audio & subtitles.",
     "plugins": [
@@ -674,11 +675,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "ukrainian"
     ],
     "shortcodes": [
+      "cakes",
       "cake",
       "825"
     ],
-    "directInstall": "https://raw.githubusercontent.com/CakesTwix/cloudstream-extensions/refs/heads/builds/repo.json",
-    "webpage": "https://github.com/CakesTwix/cloudstream-extensions",
+    "directInstall": "https://raw.githubusercontent.com/CakesTwix/cloudstream-extensions-uk/master/repo.json",
+    "webpage": "https://github.com/CakesTwix/cloudstream-extensions-uk",
     "description": "Ukrainian provider extensions with Ukrainian voiceovers and subtitles.",
     "plugins": [
       {
@@ -751,8 +753,8 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "lawliet",
       "529"
     ],
-    "directInstall": "https://raw.githubusercontent.com/lawlietbr/cloudstream-extensions-br/builds/repo.json",
-    "webpage": "https://github.com/lawlietbr/cloudstream-extensions-br",
+    "directInstall": "https://raw.githubusercontent.com/lawlietbr/lietrepo/refs/heads/main/builds/repo.json",
+    "webpage": "https://github.com/lawlietbr/lietrepo",
     "description": "Portuguese and Brazilian repository for dubbed and subtitled anime & movies.",
     "plugins": [
       {
@@ -789,11 +791,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "english"
     ],
     "shortcodes": [
+      "kingl",
       "king",
       "846"
     ],
-    "directInstall": "https://raw.githubusercontent.com/KingLucius/King-Cloudstream-Repo/builds/repo.json",
-    "webpage": "https://github.com/KingLucius/King-Cloudstream-Repo",
+    "directInstall": "https://pastebin.com/raw/Cd2g2tfz",
+    "webpage": "https://github.com/KingLucius/cs-extensions",
     "description": "Diverse selection of international anime and movie sources.",
     "plugins": [
       {
@@ -828,11 +831,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "italian"
     ],
     "shortcodes": [
+      "ipr",
       "ita",
       "482"
     ],
-    "directInstall": "https://raw.githubusercontent.com/Gian-Fr/cloudstream-extensions-italian/master/repo.json",
-    "webpage": "https://github.com/Gian-Fr/cloudstream-extensions-italian",
+    "directInstall": "https://raw.githubusercontent.com/Gian-Fr/ItalianProvider/builds/repo.json",
+    "webpage": "https://github.com/Gian-Fr/ItalianProvider",
     "description": "Curated Italian streaming extensions with anime and series support.",
     "plugins": [
       {
@@ -868,8 +872,8 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "netmirror",
       "638"
     ],
-    "directInstall": "https://raw.githubusercontent.com/Sushan64/Netmirror-CS3/builds/repo.json",
-    "webpage": "https://github.com/Sushan64/Netmirror-CS3",
+    "directInstall": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/builds/Netflix.json",
+    "webpage": "https://github.com/Sushan64/NetMirror-Extension",
     "description": "Direct mirrors of popular video-on-demand services with rapid stream links.",
     "plugins": [
       {
@@ -899,8 +903,8 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "redowan",
       "733"
     ],
-    "directInstall": "https://raw.githubusercontent.com/redowan99/CloudStream-Plugins/refs/heads/builds/repo.json",
-    "webpage": "https://github.com/redowan99/CloudStream-Plugins",
+    "directInstall": "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json",
+    "webpage": "https://github.com/redowan99/Redowan-CloudStream",
     "description": "Bangladesh domestic gigabit BDIX FTP servers and Live TV streaming.",
     "plugins": [
       {
@@ -933,11 +937,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "portuguese"
     ],
     "shortcodes": [
+      "saim",
       "saimuel",
       "724"
     ],
-    "directInstall": "https://raw.githubusercontent.com/saimuelbr/sweettheartt/refs/heads/builds/repo.json",
-    "webpage": "https://github.com/saimuelbr/sweettheartt",
+    "directInstall": "https://raw.githubusercontent.com/saimuelbr/saimuelrepo/refs/heads/main/builds/repo.json",
+    "webpage": "https://github.com/saimuelbr/saimuelrepo",
     "description": "Brazilian and Portuguese providers for movies, anime, and dubbed telenovelas.",
     "plugins": [
       {
@@ -1003,11 +1008,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "asian"
     ],
     "shortcodes": [
+      "viet",
       "vn",
       "843"
     ],
-    "directInstall": "https://raw.githubusercontent.com/phuongm/cs-vietnam/builds/repo.json",
-    "webpage": "https://github.com/phuongm/cs-vietnam",
+    "directInstall": "https://gitlab.com/tearrs/cloudstream-vietnamese/-/raw/main/repo.json",
+    "webpage": "https://gitlab.com/tearrs/cloudstream-vietnamese",
     "description": "Vietnamese movie and drama providers with Vietsub streams.",
     "plugins": [
       {
@@ -1069,11 +1075,12 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "german"
     ],
     "shortcodes": [
+      "gpr",
       "german",
       "437"
     ],
-    "directInstall": "https://raw.githubusercontent.com/Bnyro/cloudstream-extensions-german/builds/repo.json",
-    "webpage": "https://github.com/Bnyro/cloudstream-extensions-german",
+    "directInstall": "https://raw.githubusercontent.com/Bnyro/GermanProviders/refs/heads/master/repo.json",
+    "webpage": "https://github.com/Bnyro/GermanProviders",
     "description": "German providers with German dubbing, German subtitles, and Vavoo live TV.",
     "plugins": [
       {
@@ -1110,8 +1117,8 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "luna",
       "586"
     ],
-    "directInstall": "https://raw.githubusercontent.com/Luna712/cloudstream-extensions/builds/repo.json",
-    "webpage": "https://github.com/Luna712/cloudstream-extensions",
+    "directInstall": "https://raw.githubusercontent.com/Luna712/Luna712-CloudStream-Extensions/28885d17ceb7f24782b732b6056085c14c1fd027/repo.json",
+    "webpage": "https://github.com/Luna712/Luna712-CloudStream-Extensions",
     "description": "Anime streaming scrapers with multi-audio selection.",
     "plugins": [
       {
@@ -1143,8 +1150,8 @@ export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
       "zzikozz",
       "994"
     ],
-    "directInstall": "https://raw.githubusercontent.com/zzikozz/zzikozz-cloudstream-extensions/builds/repo.json",
-    "webpage": "https://github.com/zzikozz/zzikozz-cloudstream-extensions",
+    "directInstall": "https://raw.githubusercontent.com/zzikozz/frenchCS/refs/heads/main/repo.json",
+    "webpage": "https://github.com/zzikozz/frenchCS",
     "description": "French scrapers for movies, anime, and VF/VOSTFR TV series.",
     "plugins": [
       {

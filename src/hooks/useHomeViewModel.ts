@@ -8,7 +8,8 @@ export function useHomeViewModel(selectedExtension: string) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [heroDetails, setHeroDetails] = useState<Record<string, LoadResponse>>({});
   const [expandedShelf, setExpandedShelf] = useState<ExpandableShelf | null>(null);
-  const [expandingShelf, setExpandingShelf] = useState(false);
+  const [expandingShelfName, setExpandingShelfName] = useState<string | null>(null);
+  const expandingShelf = Boolean(expandingShelfName);
 
   // Request cancellation tracker (CloudStream HomeViewModel.loadAndCancel parity)
   const currentRequestId = useRef<number>(0);
@@ -131,9 +132,9 @@ export function useHomeViewModel(selectedExtension: string) {
   const expandShelf = useCallback(
     async (shelfName: string) => {
       const shelf = shelves.find((s) => s.list.name === shelfName);
-      if (!shelf || !shelf.has_next || expandingShelf) return;
+      if (!shelf || !shelf.has_next || expandingShelfName) return;
 
-      setExpandingShelf(true);
+      setExpandingShelfName(shelfName);
       const nextPage = shelf.current_page + 1;
 
       const providerArg =
@@ -161,7 +162,7 @@ export function useHomeViewModel(selectedExtension: string) {
                   list: [...s.list.list, ...newItems],
                 },
                 current_page: nextPage,
-                has_next: result.has_next && result.list.list.length > 0,
+                has_next: result.has_next && newItems.length > 0,
               };
 
               setExpandedShelf((curr) => (curr && curr.list.name === shelfName ? updatedShelf : curr));
@@ -173,10 +174,10 @@ export function useHomeViewModel(selectedExtension: string) {
       } catch (e) {
         console.error(`[useHomeViewModel] Failed to expand shelf '${shelfName}':`, e);
       } finally {
-        setExpandingShelf(false);
+        setExpandingShelfName(null);
       }
     },
-    [shelves, selectedExtension, expandingShelf]
+    [shelves, selectedExtension, expandingShelfName]
   );
 
   return {
@@ -189,6 +190,7 @@ export function useHomeViewModel(selectedExtension: string) {
     expandedShelf,
     setExpandedShelf,
     expandingShelf,
+    expandingShelfName,
     loadHome,
     expandShelf,
   };

@@ -518,10 +518,15 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
     const resumeSec = targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : undefined;
     console.log('[PlayerOverlay] Loading stream in native MPV:', activeLink.url, 'resumeSec:', resumeSec);
 
+    const effectiveHeaders: Record<string, string> = { ...(activeLink.headers || {}) };
+    if (activeLink.referer && !effectiveHeaders['Referer'] && !effectiveHeaders['referer']) {
+      effectiveHeaders['Referer'] = activeLink.referer;
+    }
+
     invoke('player_load', {
       url: activeLink.url,
       title,
-      headers: activeLink.headers || null,
+      headers: Object.keys(effectiveHeaders).length > 0 ? effectiveHeaders : null,
       startTime: resumeSec ?? null,
     }).catch((e: unknown) => {
       console.error('[PlayerOverlay] Failed to load stream in native MPV:', e);
