@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   Episode,
   ExtractorLink,
@@ -8,6 +9,9 @@ import {
   WatchHistoryItem,
   WatchlistItem,
   DubStatus,
+  DownloadRequest,
+  DownloadItem,
+  DownloadProgressPayload,
 } from '../types';
 import {
   ChevronLeft,
@@ -22,7 +26,9 @@ import {
   Share2,
   AlertCircle,
   Radio,
+  Download,
 } from 'lucide-react';
+import { CloudStreamDeviceIcon, DownloadPieClock, WatchPlayProgress, formatByteSize } from '../screens/DownloadsScreen';
 
 interface DetailModalProps {
   item: SearchResponse;
@@ -61,13 +67,28 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
   // Watch History & Progress
   const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
+  const [allWatchHistory, setAllWatchHistory] = useState<WatchHistoryItem[]>([]);
 
   // Watchlist State
   const [watchlistStatus, setWatchlistStatus] = useState<string | null>(null);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
 
+  // Downloads State (CloudStream Offline Parity)
+  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+
+  // Local Watched Map (fallback / quick toggle from Downloads screen)
+  const [localWatchedMap, setLocalWatchedMap] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('cloudstream_watched_episodes');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
   // Stream Extraction State
   const [extractingKey, setExtractingKey] = useState<string | null>(null);
+  const [downloadingKeys, setDownloadingKeys] = useState<Record<string, 'extracting' | 'queued' | 'done'>>({});
 
   // Season & Controls
   const [selectedSeason, setSelectedSeason] = useState<number>(1);
@@ -116,26 +137,40 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     }
   }, [effectiveTvType, isMovie]);
 
-  // Load Media Details and History
+  // Load Media Details, Watch History, Watchlist, and Downloads
   const fetchDetails = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [res, history, watchlist] = await Promise.all([
+      try {
+        const raw = localStorage.getItem('cloudstream_watched_episodes');
+        if (raw) setLocalWatchedMap(JSON.parse(raw));
+      } catch {}
+
+      const [res, history, fullHistory, watchlist, dlItems] = await Promise.all([
         invoke<LoadResponse>('load_media', {
           provider: item.api_name,
           url: item.url,
         }),
         invoke<WatchHistoryItem[]>('get_media_watch_history', {
           mediaId: item.url,
+          title: item.name,
+        }).catch(() => [] as WatchHistoryItem[]),
+        invoke<WatchHistoryItem[]>('get_watch_history', {
+          limit: 1000,
         }).catch(() => [] as WatchHistoryItem[]),
         invoke<WatchlistItem[]>('get_watchlist').catch(
           () => [] as WatchlistItem[]
+        ),
+        invoke<DownloadItem[]>('get_downloads').catch(
+          () => [] as DownloadItem[]
         ),
       ]);
 
       setDetails(res);
       setWatchHistory(history);
+      setAllWatchHistory(fullHistory);
+      setDownloads(dlItems);
 
       const match = watchlist.find((w) => w.media_id === item.url);
       setWatchlistStatus(match ? match.status : null);
@@ -170,6 +205,37 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     fetchDetails();
   }, [fetchDetails]);
 
+  // Real-time listener for download progress and status
+  useEffect(() => {
+    const unlistenProgress = listen<DownloadProgressPayload>('download-progress', (event) => {
+      const payload = event.payload;
+      setDownloads((prev) =>
+        prev.map((d) =>
+          d.id === payload.id
+            ? {
+                ...d,
+                downloaded_bytes: payload.downloaded_bytes,
+                total_bytes: payload.total_bytes > 0 ? payload.total_bytes : d.total_bytes,
+                progress_pct: payload.progress_pct,
+                status: payload.status as any,
+              }
+            : d
+        )
+      );
+    });
+
+    const unlistenStatus = listen('download-status', () => {
+      invoke<DownloadItem[]>('get_downloads')
+        .then(setDownloads)
+        .catch(() => {});
+    });
+
+    return () => {
+      unlistenProgress.then((f) => f());
+      unlistenStatus.then((f) => f());
+    };
+  }, []);
+
   // Keyboard Escape Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -185,27 +251,250 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, activeTrailerUrl]);
 
-  // Progress Map: key = `${season}_${episode}` -> WatchHistoryItem
-  const progressMap = useMemo(() => {
-    const map = new Map<string, WatchHistoryItem>();
-    for (const h of watchHistory) {
-      const s = h.season_num ?? 1;
-      const e = h.episode_num ?? 1;
-      map.set(`${s}_${e}`, h);
+  // Find downloaded item matching an episode
+  const getDownloadedItemForEpisode = useCallback(
+    (ep: Episode): DownloadItem | undefined => {
+      const s = ep.season || 1;
+      const e = ep.episode;
+      const epNameClean = (ep.name || '').trim().toLowerCase();
+      const currentMediaTitle = (details?.name || item.name || '').trim().toLowerCase();
+
+      // Find downloads belonging to this media
+      const mediaDownloads = downloads.filter((d) => {
+        if (d.parent_id && (d.parent_id === item.url || d.parent_id === details?.url)) return true;
+        if (d.id && (d.id.includes(item.url) || (details?.url && d.id.includes(details.url)))) return true;
+        if (d.media_title && currentMediaTitle && d.media_title.trim().toLowerCase() === currentMediaTitle) return true;
+        return false;
+      });
+
+      // 1. Try match by season & episode num
+      const numMatches = mediaDownloads.filter(
+        (d) => (d.season_num ?? 1) === s && (d.episode_num ?? 1) === e
+      );
+
+      if (numMatches.length === 1) {
+        return numMatches[0];
+      }
+
+      if (numMatches.length > 1) {
+        if (epNameClean) {
+          const exact = numMatches.find(
+            (d) => (d.episode_title || '').trim().toLowerCase() === epNameClean
+          );
+          if (exact) return exact;
+          const partial = numMatches.find((d) => {
+            const dt = (d.episode_title || '').trim().toLowerCase();
+            return dt.includes(epNameClean) || epNameClean.includes(dt);
+          });
+          if (partial) return partial;
+        }
+        return numMatches[0];
+      }
+
+      // 2. Try match by episode title
+      if (epNameClean) {
+        const titleMatch = mediaDownloads.find((d) => {
+          const dt = (d.episode_title || '').trim().toLowerCase();
+          return dt === epNameClean || dt.includes(epNameClean) || epNameClean.includes(dt);
+        });
+        if (titleMatch) return titleMatch;
+      }
+
+      return undefined;
+    },
+    [downloads, details, item]
+  );
+
+  // Count & total size of completed downloaded episodes for this media
+  const { downloadedCount, totalDownloadedBytes } = useMemo(() => {
+    const currentMediaTitle = (details?.name || item.name || '').trim().toLowerCase();
+    const mediaDownloads = downloads.filter((d) => {
+      if (d.status !== 'completed') return false;
+      if (d.parent_id && (d.parent_id === item.url || d.parent_id === details?.url)) return true;
+      if (d.id && (d.id.includes(item.url) || (details?.url && d.id.includes(details.url)))) return true;
+      if (d.media_title && currentMediaTitle && d.media_title.trim().toLowerCase() === currentMediaTitle) return true;
+      return false;
+    });
+
+    const seen = new Set<string>();
+    let count = 0;
+    let bytes = 0;
+    for (const d of mediaDownloads) {
+      const key = `${d.season_num ?? 1}_${d.episode_num ?? 1}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        count++;
+        bytes += d.total_bytes > 0 ? d.total_bytes : d.downloaded_bytes;
+      }
     }
-    return map;
-  }, [watchHistory]);
+    return { downloadedCount: count, totalDownloadedBytes: bytes };
+  }, [downloads, details, item]);
+
+  // Real-time Watch History Sync
+  useEffect(() => {
+    const refreshWatchHistory = async () => {
+      try {
+        const [history, fullHistory] = await Promise.all([
+          invoke<WatchHistoryItem[]>('get_media_watch_history', {
+            mediaId: item.url,
+            title: item.name,
+          }).catch(() => [] as WatchHistoryItem[]),
+          invoke<WatchHistoryItem[]>('get_watch_history', {
+            limit: 1000,
+          }).catch(() => [] as WatchHistoryItem[]),
+        ]);
+        setWatchHistory(history);
+        setAllWatchHistory(fullHistory);
+      } catch (err) {
+        console.error('Failed to refresh watch history in DetailModal:', err);
+      }
+    };
+
+    const interval = setInterval(refreshWatchHistory, 2500);
+    window.addEventListener('focus', refreshWatchHistory);
+    window.addEventListener('cloudstream-watch-progress-saved', refreshWatchHistory);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', refreshWatchHistory);
+      window.removeEventListener('cloudstream-watch-progress-saved', refreshWatchHistory);
+    };
+  }, [item]);
+
+  // Compute watch progress for an episode
+  const getWatchProgressForEpisode = useCallback(
+    (ep: Episode) => {
+      const s = ep.season || 1;
+      const e = ep.episode;
+      const epNameClean = (ep.name || '').trim().toLowerCase();
+      const currentMediaTitle = (details?.name || item.name || '').trim().toLowerCase();
+      const dlItem = getDownloadedItemForEpisode(ep);
+
+      const combinedHistory = [...watchHistory, ...allWatchHistory];
+      const match = combinedHistory.find((h) => {
+        const isSameMedia =
+          h.media_id === item.url ||
+          h.media_id === (details?.url || '') ||
+          (dlItem && (
+            h.media_id === dlItem.id ||
+            h.media_id === dlItem.url ||
+            h.media_id === dlItem.file_path ||
+            h.media_id === dlItem.parent_id
+          )) ||
+          (h.title && currentMediaTitle && h.title.trim().toLowerCase() === currentMediaTitle) ||
+          (h.title && currentMediaTitle && (h.title.toLowerCase().includes(currentMediaTitle) || currentMediaTitle.includes(h.title.toLowerCase())));
+
+        if (!isSameMedia) return false;
+
+        const hSeason = h.season_num ?? 1;
+        const hEpisode = h.episode_num ?? 1;
+        if (hSeason === s && hEpisode === e) {
+          return true;
+        }
+
+        if (epNameClean && h.episode_name) {
+          const hEpClean = h.episode_name.trim().toLowerCase();
+          if (hEpClean === epNameClean || hEpClean.includes(epNameClean) || epNameClean.includes(hEpClean)) {
+            return true;
+          }
+        }
+
+        return false;
+      });
+
+      if (match && match.duration_ms > 0) {
+        const isCompleted =
+          match.is_completed ||
+          (match.position_ms / match.duration_ms >= 0.95);
+
+        const percent = isCompleted
+          ? 100
+          : Math.min(100, Math.max(1, Math.round((match.position_ms / match.duration_ms) * 100)));
+
+        const remainingSeconds = Math.max(0, Math.round((match.duration_ms - match.position_ms) / 1000));
+        const remainingMinutes = Math.ceil(remainingSeconds / 60);
+
+        if (
+          (dlItem && localWatchedMap[dlItem.id] === true) ||
+          localWatchedMap[`${s}_${e}`] === true
+        ) {
+          return {
+            isCompleted: true,
+            percent: 100,
+            remainingMinutes: 0,
+            positionMs: match.position_ms,
+            durationMs: match.duration_ms,
+          };
+        }
+
+        return {
+          isCompleted,
+          percent,
+          remainingMinutes,
+          positionMs: match.position_ms,
+          durationMs: match.duration_ms,
+        };
+      }
+
+      // Quick toggle fallback from localStorage if no SQLite record exists
+      if (dlItem && localWatchedMap[dlItem.id] === true) {
+        return { isCompleted: true, percent: 100, remainingMinutes: 0, positionMs: 100000, durationMs: 100000 };
+      }
+      const epKey = `${s}_${e}`;
+      if (localWatchedMap[epKey] === true) {
+        return { isCompleted: true, percent: 100, remainingMinutes: 0, positionMs: 100000, durationMs: 100000 };
+      }
+
+      return { isCompleted: false, percent: 0, remainingMinutes: 0, positionMs: 0, durationMs: 0 };
+    },
+    [watchHistory, allWatchHistory, localWatchedMap, details, item, getDownloadedItemForEpisode]
+  );
 
   // Most recent watched item for Resume
   const resumeItem = useMemo(() => {
-    if (!watchHistory || watchHistory.length === 0) return null;
-    return [...watchHistory].sort(
-      (a, b) => b.last_watched_at - a.last_watched_at
-    )[0];
-  }, [watchHistory]);
+    const currentMediaTitle = (details?.name || item.name || '').trim().toLowerCase();
+    const combinedHistory = [...watchHistory, ...allWatchHistory];
+    const matchingHistory = combinedHistory.filter((h) => {
+      const isSameMedia =
+        h.media_id === item.url ||
+        h.media_id === (details?.url || '') ||
+        (h.title && currentMediaTitle && h.title.trim().toLowerCase() === currentMediaTitle) ||
+        (h.title && currentMediaTitle && (h.title.toLowerCase().includes(currentMediaTitle) || currentMediaTitle.includes(h.title.toLowerCase())));
+      return isSameMedia;
+    });
 
-  // Handle Play Episode / Movie
+    if (matchingHistory.length === 0) return null;
+    return [...matchingHistory].sort((a, b) => b.last_watched_at - a.last_watched_at)[0];
+  }, [watchHistory, allWatchHistory, details, item]);
+
+  // Handle Play Episode / Movie (with instant offline playback support)
   const handlePlayEpisode = async (ep: Episode) => {
+    const dlItem = getDownloadedItemForEpisode(ep);
+    const watchProgress = getWatchProgressForEpisode(ep);
+
+    const startTime =
+      watchProgress.positionMs > 3000 &&
+      !watchProgress.isCompleted &&
+      (watchProgress.durationMs === 0 || watchProgress.positionMs / watchProgress.durationMs < 0.95)
+        ? watchProgress.positionMs / 1000
+        : undefined;
+
+    // OFFLINE PLAYBACK: If this episode is already downloaded, play the local file instantly!
+    if (dlItem && dlItem.status === 'completed' && dlItem.file_path) {
+      const offlineLink: ExtractorLink = {
+        source: 'Offline',
+        name: 'Offline Media',
+        url: dlItem.file_path,
+        referer: '',
+        quality: 'Quality1080p',
+        is_m3u8: dlItem.file_path.endsWith('.m3u8') || dlItem.file_path.endsWith('.ts'),
+        is_dash: false,
+        headers: {},
+      };
+      onPlay(item, ep, [offlineLink], details?.episodes, details || undefined, startTime);
+      return;
+    }
+
     const epKey = `${ep.season || 1}_${ep.episode}`;
     setExtractingKey(epKey);
     try {
@@ -214,17 +503,6 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         data: ep.data,
       });
       if (links && links.length > 0) {
-        const epHist = watchHistory.find(
-          (h) => (h.season_num ?? 1) === (ep.season || 1) && (h.episode_num ?? 1) === ep.episode
-        );
-        const startTime =
-          epHist &&
-          epHist.position_ms > 3000 &&
-          !epHist.is_completed &&
-          (epHist.duration_ms === 0 || epHist.position_ms / epHist.duration_ms < 0.95)
-            ? epHist.position_ms / 1000
-            : undefined;
-
         onPlay(item, ep, links, details?.episodes, details || undefined, startTime);
       } else {
         alert('No playable links found for this source.');
@@ -234,6 +512,127 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       alert('Error extracting video links: ' + err);
     } finally {
       setExtractingKey(null);
+    }
+  };
+
+  // Handle Quick Toggle Watched State (CloudStream Parity)
+  const handleToggleWatched = async (ep: Episode, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const epKey = `${ep.season || 1}_${ep.episode}`;
+    const watchStatus = getWatchProgressForEpisode(ep);
+    const nextWatched = !watchStatus.isCompleted;
+
+    // 1. Update localStorage
+    const dlItem = getDownloadedItemForEpisode(ep);
+    setLocalWatchedMap((prev) => {
+      const next = { ...prev, [epKey]: nextWatched };
+      if (dlItem) next[dlItem.id] = nextWatched;
+      try {
+        localStorage.setItem('cloudstream_watched_episodes', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // 2. Persist to SQLite
+    try {
+      const histItem: WatchHistoryItem = {
+        media_id: item.url,
+        provider_id: item.api_name,
+        title: details?.name || item.name,
+        poster_url: details?.poster_url || item.poster_url,
+        tv_type: (effectiveTvType as any) || 'TvSeries',
+        episode_num: ep.episode,
+        season_num: ep.season || 1,
+        episode_name: ep.name,
+        position_ms: nextWatched ? 100000 : 0,
+        duration_ms: nextWatched ? 100000 : 0,
+        last_watched_at: Date.now(),
+        is_completed: nextWatched,
+      };
+      await invoke('save_watch_progress', { item: histItem });
+      const [history, updated] = await Promise.all([
+        invoke<WatchHistoryItem[]>('get_media_watch_history', {
+          mediaId: item.url,
+          title: item.name,
+        }).catch(() => [] as WatchHistoryItem[]),
+        invoke<WatchHistoryItem[]>('get_watch_history', { limit: 1000 }).catch(() => [] as WatchHistoryItem[]),
+      ]);
+      setWatchHistory(history);
+      setAllWatchHistory(updated);
+      window.dispatchEvent(new CustomEvent('cloudstream-watch-progress-saved'));
+    } catch (err) {
+      console.warn('Could not persist watch progress to SQLite:', err);
+    }
+  };
+
+  // Handle Download Episode (CloudStream Parity)
+  const handleDownloadEpisode = async (ep: Episode) => {
+    const epKey = `${ep.season || 1}_${ep.episode}`;
+    setDownloadingKeys((prev) => ({ ...prev, [epKey]: 'extracting' }));
+
+    try {
+      const links: ExtractorLink[] = await invoke('load_links', {
+        provider: item.api_name,
+        data: ep.data,
+      });
+
+      if (!links || links.length === 0) {
+        alert('No downloadable stream links found for this source.');
+        setDownloadingKeys((prev) => {
+          const next = { ...prev };
+          delete next[epKey];
+          return next;
+        });
+        return;
+      }
+
+      // Sort links by quality descending (1080 > 720 > 480 etc.)
+      const qualityScore = (q?: any): number => {
+        const str = String(q || '');
+        if (str.includes('4K')) return 2160;
+        if (str.includes('1080')) return 1080;
+        if (str.includes('720')) return 720;
+        if (str.includes('480')) return 480;
+        if (str.includes('360')) return 360;
+        return 100;
+      };
+      const sortedLinks = [...links].sort((a, b) => qualityScore(b.quality) - qualityScore(a.quality));
+      const chosenLink = sortedLinks[0];
+
+      const parentId = item.url;
+      const downloadId = `${item.api_name}_${item.url}_s${ep.season || 1}_e${ep.episode}`;
+
+      const request: DownloadRequest = {
+        id: downloadId,
+        parent_id: parentId,
+        url: chosenLink.url,
+        source_api: item.api_name,
+        media_title: details?.name || item.name,
+        episode_title: ep.name || (ep.episode ? `Episode ${ep.episode}` : undefined),
+        episode_num: ep.episode,
+        season_num: ep.season || 1,
+        tv_type: details?.tv_type || item.tv_type || 'Movie',
+        poster_url: details?.poster_url || item.poster_url,
+        headers: chosenLink.headers,
+      };
+
+      await invoke('start_download', { request });
+      setDownloadingKeys((prev) => ({ ...prev, [epKey]: 'queued' }));
+      setTimeout(() => {
+        setDownloadingKeys((prev) => {
+          const next = { ...prev };
+          delete next[epKey];
+          return next;
+        });
+      }, 3500);
+    } catch (err) {
+      console.error('Failed to start download:', err);
+      alert('Error starting download: ' + err);
+      setDownloadingKeys((prev) => {
+        const next = { ...prev };
+        delete next[epKey];
+        return next;
+      });
     }
   };
 
@@ -360,6 +759,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         data: details.url,
         name: details.name,
       };
+      const dl = getDownloadedItemForEpisode(ep);
+      const isDl = Boolean(dl && dl.status === 'completed' && dl.file_path);
 
       if (
         resumeItem &&
@@ -377,16 +778,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           Math.round((resumeItem.position_ms / resumeItem.duration_ms) * 100)
         );
         return {
-          label: `Resume Movie (${remainingMins}m left)`,
+          label: `Resume Movie (${remainingMins}m left${isDl ? ' • Offline' : ''})`,
           progress: percent,
           episode: ep,
+          isOffline: isDl,
         };
       }
 
       return {
-        label: 'Play Movie',
+        label: isDl ? 'Play Movie (Offline Ready)' : 'Play Movie',
         progress: null,
         episode: ep,
+        isOffline: isDl,
       };
     }
 
@@ -399,6 +802,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       if (match) {
         const sNum = resumeItem.season_num || 1;
         const eNum = resumeItem.episode_num || 1;
+        const dl = getDownloadedItemForEpisode(match);
+        const isDl = Boolean(dl && dl.status === 'completed' && dl.file_path);
+
         if (!resumeItem.is_completed && resumeItem.position_ms > 0) {
           const remainingMs = Math.max(
             0,
@@ -412,15 +818,17 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             )
           );
           return {
-            label: `Resume S${sNum}:E${eNum} (${remainingMins}m left)`,
+            label: `Resume S${sNum}:E${eNum} (${remainingMins}m left${isDl ? ' • Offline' : ''})`,
             progress: percent,
             episode: match,
+            isOffline: isDl,
           };
         } else {
           return {
-            label: `Play S${sNum}:E${eNum}`,
+            label: `Play S${sNum}:E${eNum}${isDl ? ' (Offline Ready)' : ''}`,
             progress: null,
             episode: match,
+            isOffline: isDl,
           };
         }
       }
@@ -428,15 +836,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
     const firstEp = details.episodes[0];
     if (firstEp) {
+      const dl = getDownloadedItemForEpisode(firstEp);
+      const isDl = Boolean(dl && dl.status === 'completed' && dl.file_path);
       return {
-        label: `Play S${firstEp.season || 1}:E${firstEp.episode}`,
+        label: `Play S${firstEp.season || 1}:E${firstEp.episode}${isDl ? ' (Offline Ready)' : ''}`,
         progress: null,
         episode: firstEp,
+        isOffline: isDl,
       };
     }
 
     return null;
-  }, [details, isMovie, resumeItem]);
+  }, [details, isMovie, resumeItem, getDownloadedItemForEpisode]);
 
   // Trailer URL formatter
   const getEmbedTrailerUrl = (url: string) => {
@@ -633,6 +1044,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     {displayStatus}
                   </span>
                 )}
+
+                {downloadedCount > 0 && (
+                  <span className="stremio-downloaded-summary-badge" title="Offline ready">
+                    <CloudStreamDeviceIcon size={14} color="#10b981" />
+                    <span>
+                      {downloadedCount} Episode{downloadedCount === 1 ? '' : 's'} Downloaded ({formatByteSize(totalDownloadedBytes)})
+                    </span>
+                  </span>
+                )}
               </div>
 
               {/* Action Buttons Bar */}
@@ -645,7 +1065,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     onClick={() => handlePlayEpisode(primaryCTA.episode)}
                     disabled={extractingKey !== null}
                   >
-                    <Play size={18} fill="#ffffff" color="#ffffff" />
+                    {primaryCTA.isOffline ? (
+                      <CloudStreamDeviceIcon size={18} color="#ffffff" />
+                    ) : (
+                      <Play size={18} fill="#ffffff" color="#ffffff" />
+                    )}
                     <span>
                       {extractingKey ? 'Extracting...' : primaryCTA.label}
                     </span>
@@ -655,6 +1079,32 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         style={{ width: `${primaryCTA.progress}%` }}
                       />
                     )}
+                  </button>
+                )}
+
+                {/* Download Media CTA */}
+                {primaryCTA && (
+                  <button
+                    type="button"
+                    className={`stremio-action-download-btn ${downloadedCount > 0 ? 'completed' : ''}`}
+                    onClick={() => handleDownloadEpisode(primaryCTA.episode)}
+                    disabled={downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] !== undefined}
+                    title={downloadedCount > 0 ? `${downloadedCount} episodes downloaded offline` : 'Download for offline viewing'}
+                  >
+                    {downloadedCount > 0 ? (
+                      <CloudStreamDeviceIcon size={17} color="#10b981" />
+                    ) : (
+                      <Download size={17} />
+                    )}
+                    <span>
+                      {downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] === 'extracting'
+                        ? 'Extracting...'
+                        : downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] === 'queued'
+                        ? 'Queued!'
+                        : downloadedCount > 0
+                        ? `${downloadedCount} Downloaded`
+                        : 'Download'}
+                    </span>
                   </button>
                 )}
 
@@ -915,6 +1365,26 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   </button>
                 )}
 
+                {/* Download Next Episode CTA */}
+                {primaryCTA && (
+                  <button
+                    type="button"
+                    className="stremio-action-download-btn"
+                    onClick={() => handleDownloadEpisode(primaryCTA.episode)}
+                    disabled={downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] !== undefined}
+                    title="Download episode for offline viewing"
+                  >
+                    <Download size={17} />
+                    <span>
+                      {downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] === 'extracting'
+                        ? 'Extracting...'
+                        : downloadingKeys[`${primaryCTA.episode.season || 1}_${primaryCTA.episode.episode}`] === 'queued'
+                        ? 'Queued!'
+                        : 'Download'}
+                    </span>
+                  </button>
+                )}
+
                 {/* Trailer Button */}
                 {details.trailers && details.trailers.length > 0 ? (
                   <button
@@ -1140,17 +1610,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 {displayEpisodes.length > 0 ? (
                   displayEpisodes.map((ep) => {
                     const epKey = `${ep.season || 1}_${ep.episode}`;
-                    const history = progressMap.get(epKey);
-                    const progressPercent =
-                      history && history.duration_ms > 0
-                        ? Math.min(
-                            100,
-                            Math.round(
-                              (history.position_ms / history.duration_ms) *
-                                100
-                            )
-                          )
-                        : 0;
+                    const dlItem = getDownloadedItemForEpisode(ep);
+                    const isDownloaded = Boolean(dlItem && dlItem.status === 'completed' && dlItem.file_path);
+                    const isDownloading = dlItem?.status === 'downloading' || downloadingKeys[epKey] === 'extracting' || downloadingKeys[epKey] === 'queued';
+                    const isPaused = dlItem?.status === 'paused';
+                    const downloadProgress = dlItem?.progress_pct || 0;
+
+                    const watchStatus = getWatchProgressForEpisode(ep);
+                    const progressPercent = watchStatus.percent;
                     const isExtracting = extractingKey === epKey;
 
                     return (
@@ -1161,7 +1628,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         }`}
                         onClick={() => handlePlayEpisode(ep)}
                       >
-                        {/* 16:9 Thumbnail preview */}
+                        {/* 16:9 Thumbnail preview with CloudStream Android WatchPlayProgress */}
                         <div className="stremio-ep-thumb-wrapper">
                           <img
                             src={
@@ -1173,47 +1640,87 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             className="stremio-ep-thumb"
                           />
 
-                          {/* Play Overlay */}
+                          {/* Center Play & Watch Progress Ring (CloudStream Android Parity) */}
                           <div className="stremio-ep-thumb-overlay">
                             {isExtracting ? (
                               <div className="stremio-mini-spinner" />
                             ) : (
-                              <Play size={20} fill="#ffffff" color="#ffffff" />
+                              <WatchPlayProgress
+                                percent={progressPercent}
+                                isWatched={watchStatus.isCompleted}
+                                onToggleWatched={(e) => handleToggleWatched(ep, e)}
+                                size={36}
+                              />
                             )}
                           </div>
-
-                          {/* Watched checkmark */}
-                          {history?.is_completed && (
-                            <div className="stremio-ep-watched-check">
-                              <Check size={11} strokeWidth={3} />
-                            </div>
-                          )}
-
-                          {/* Progress bar at bottom */}
-                          {progressPercent > 0 && (
-                            <div className="stremio-ep-progress-bar">
-                              <div
-                                className="stremio-ep-progress-fill"
-                                style={{ width: `${progressPercent}%` }}
-                              />
-                            </div>
-                          )}
                         </div>
 
-                        {/* Episode Title & Date */}
+                        {/* Middle: Clean Title & Description (CloudStream Android Parity) */}
                         <div className="stremio-ep-meta">
                           <div className="stremio-ep-title" title={ep.name}>
                             {ep.episode}. {ep.name || `Episode ${ep.episode}`}
                           </div>
-                          {ep.release_date && (
-                            <div className="stremio-ep-date">
-                              {ep.release_date}
+
+                          {isDownloaded && dlItem && (
+                            <div className="stremio-ep-submeta">
+                              <span className="stremio-ep-size-tag">
+                                {formatByteSize(dlItem.total_bytes > 0 ? dlItem.total_bytes : dlItem.downloaded_bytes)}
+                              </span>
                             </div>
                           )}
-                          {ep.description && (
+
+                          {ep.description ? (
                             <div className="stremio-ep-desc">
                               {ep.description}
                             </div>
+                          ) : ep.release_date ? (
+                            <div className="stremio-ep-date">
+                              {ep.release_date}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {/* Right: Clean Download / Device Status Action Button */}
+                        <div className="stremio-ep-actions">
+                          {isDownloaded && dlItem ? (
+                            <button
+                              type="button"
+                              className="stremio-ep-download-btn downloaded"
+                              title={`Downloaded (${formatByteSize(dlItem.total_bytes > 0 ? dlItem.total_bytes : dlItem.downloaded_bytes)}) • Click to play offline`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePlayEpisode(ep);
+                              }}
+                            >
+                              <CloudStreamDeviceIcon size={26} color="#ffffff" />
+                            </button>
+                          ) : isDownloading ? (
+                            <div className="stremio-ep-download-clock" title={`Downloading: ${downloadProgress.toFixed(0)}%`}>
+                              <DownloadPieClock pct={downloadProgress} status="downloading" size={26} />
+                            </div>
+                          ) : isPaused ? (
+                            <div className="stremio-ep-download-clock" title="Download Paused">
+                              <DownloadPieClock pct={downloadProgress} status="paused" size={26} />
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="stremio-ep-download-btn"
+                              title="Download episode"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadEpisode(ep);
+                              }}
+                              disabled={downloadingKeys[epKey] !== undefined}
+                            >
+                              {downloadingKeys[epKey] === 'extracting' ? (
+                                <div className="stremio-mini-spinner" style={{ width: 16, height: 16 }} />
+                              ) : downloadingKeys[epKey] === 'queued' ? (
+                                <Check size={18} color="#10b981" />
+                              ) : (
+                                <Download size={24} />
+                              )}
+                            </button>
                           )}
                         </div>
                       </div>

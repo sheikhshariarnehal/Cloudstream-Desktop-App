@@ -314,3 +314,89 @@ export const getFlagFromIso = (lang?: string): string => {
   }
 };
 
+export interface AppDirectoryInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  path: string;
+  exists: boolean;
+  file_count: number;
+  total_bytes: number;
+  formatted_size: string;
+  can_browse: boolean;
+  can_clear: boolean;
+  can_open: boolean;
+}
+
+export interface CacheClearResult {
+  freed_bytes: number;
+  formatted_freed: string;
+  deleted_count: number;
+  message: string;
+}
+
+export interface DownloadItem {
+  id: string;
+  parent_id: string;
+  url: string;
+  source_api: string;
+  media_title: string;
+  episode_title?: string;
+  season_num?: number;
+  episode_num?: number;
+  tv_type: string;
+  poster_url?: string;
+  file_path: string;
+  total_bytes: number;
+  downloaded_bytes: number;
+  formatted_total: string;
+  formatted_downloaded: string;
+  status: 'pending' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  error_message?: string;
+  speed_bytes_per_sec: number;
+  formatted_speed: string;
+  eta_seconds: number;
+  progress_pct: number;
+  created_at: number;
+  completed_at?: number;
+}
+
+export interface DownloadRequest {
+  id?: string;
+  parent_id: string;
+  url: string;
+  source_api: string;
+  media_title: string;
+  episode_title?: string;
+  season_num?: number;
+  episode_num?: number;
+  tv_type: string;
+  poster_url?: string;
+  headers?: Record<string, string>;
+  custom_download_path?: string;
+}
+
+export interface DownloadProgressPayload {
+  id: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed_bytes_per_sec: number;
+  formatted_speed: string;
+  eta_seconds: number;
+  progress_pct: number;
+  status: string;
+}
+
+export interface StorageDiskInfo {
+  total_space_bytes: number;
+  available_space_bytes: number;
+  used_space_bytes: number;
+  cloudstream_download_bytes: number;
+  formatted_total: string;
+  formatted_available: string;
+  formatted_used: string;
+  formatted_cloudstream: string;
+  download_path: string;
+}
+

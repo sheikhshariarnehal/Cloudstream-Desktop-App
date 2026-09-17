@@ -14,6 +14,7 @@ import {
   WatchStatusFilter,
   LoadResponse,
   EngineStatus,
+  DownloadItem,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MediaCard } from './components/MediaCard';
@@ -37,6 +38,7 @@ const PluginsScreen = lazy(() => import('./screens/PluginsScreen').then((m) => (
 const SearchScreen = lazy(() => import('./screens/SearchScreen').then((m) => ({ default: m.SearchScreen })));
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen })));
 const ExpandedShelfModal = lazy(() => import('./components/ExpandedShelfModal').then((m) => ({ default: m.ExpandedShelfModal })));
+const DownloadsScreen = lazy(() => import('./screens/DownloadsScreen').then((m) => ({ default: m.DownloadsScreen })));
 import {
   Search,
   ChevronDown,
@@ -285,6 +287,96 @@ export const App: React.FC = () => {
     mediaDetails?: LoadResponse;
     startTime?: number;
   } | null>(null);
+
+  // Active Downloads Count (for sidebar badge)
+  const [activeDownloadsCount, setActiveDownloadsCount] = useState<number>(0);
+
+  useEffect(() => {
+    let isMounted = true;
+    const updateActiveCount = async () => {
+      try {
+        const list = await invoke<DownloadItem[]>('get_downloads');
+        if (!isMounted) return;
+        const count = list.filter((d) => d.status === 'downloading' || d.status === 'pending').length;
+        setActiveDownloadsCount(count);
+      } catch {
+        // ignore
+      }
+    };
+
+    updateActiveCount();
+
+    const unlistenProgress = listen('download-progress', () => {
+      if (isMounted) {
+        setActiveDownloadsCount((prev) => Math.max(prev, 1));
+      }
+    });
+
+    const unlistenStatus = listen('download-status', () => {
+      if (isMounted) {
+        updateActiveCount();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unlistenProgress.then((u) => u());
+      unlistenStatus.then((u) => u());
+    };
+  }, []);
+
+  const handlePlayOfflineMedia = (
+    filePath: string,
+    title: string,
+    dlItem?: DownloadItem,
+    allDownloadedEpisodes?: DownloadItem[]
+  ) => {
+    const syntheticItem: SearchResponse = {
+      name: dlItem?.media_title || title,
+      url: dlItem?.parent_id || dlItem?.url || filePath,
+      api_name: dlItem?.source_api || 'Offline',
+      tv_type: (dlItem?.tv_type as any) || 'Movie',
+      poster_url: dlItem?.poster_url,
+    };
+
+    const syntheticEpisode: Episode = {
+      name: dlItem?.episode_title || (dlItem?.episode_num ? `Episode ${dlItem.episode_num}` : title),
+      episode: dlItem?.episode_num || 1,
+      season: dlItem?.season_num || 1,
+      data: filePath,
+    };
+
+    const offlineLink: ExtractorLink = {
+      source: 'Offline',
+      name: 'Offline Media',
+      url: filePath,
+      referer: '',
+      quality: 'Quality1080p',
+      is_m3u8: filePath.endsWith('.m3u8') || filePath.endsWith('.ts'),
+      is_dash: false,
+      headers: {},
+    };
+
+    const mappedAllEpisodes: Episode[] =
+      allDownloadedEpisodes && allDownloadedEpisodes.length > 0
+        ? allDownloadedEpisodes
+            .filter((d) => d.status === 'completed')
+            .map((d) => ({
+              name: d.episode_title || (d.episode_num ? `Episode ${d.episode_num}` : d.media_title),
+              episode: d.episode_num || 1,
+              season: d.season_num || 1,
+              data: d.file_path,
+            }))
+        : [syntheticEpisode];
+
+    setSelectedItem(null);
+    setPlayerState({
+      item: syntheticItem,
+      episode: syntheticEpisode,
+      links: [offlineLink],
+      allEpisodes: mappedAllEpisodes,
+    });
+  };
 
   // Load available extensions
   const loadExtensions = async () => {
@@ -898,7 +990,7 @@ export const App: React.FC = () => {
   return (
     <div className="app-container">
       {/* Left Navigation Rail (Stremio Exact) */}
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} activeDownloadsCount={activeDownloadsCount} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
         {/* Top Header Bar (Stremio Exact) */}
@@ -1695,6 +1787,16 @@ export const App: React.FC = () => {
                   setActiveTab('home');
                   handleSelectExtension(name);
                 }}
+              />
+            </Suspense>
+          )}
+
+          {/* OFFLINE DOWNLOADS SCREEN */}
+          {activeTab === 'downloads' && (
+            <Suspense fallback={<ScreenLoadingFallback />}>
+              <DownloadsScreen
+                onPlayOfflineMedia={handlePlayOfflineMedia}
+                onNavigateToDiscover={() => setActiveTab('discover')}
               />
             </Suspense>
           )}

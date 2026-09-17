@@ -94,12 +94,35 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS downloads (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                source_api TEXT NOT NULL,
+                media_title TEXT NOT NULL,
+                episode_title TEXT,
+                season_num INTEGER,
+                episode_num INTEGER,
+                tv_type TEXT NOT NULL,
+                poster_url TEXT,
+                file_path TEXT NOT NULL,
+                total_bytes INTEGER DEFAULT 0,
+                downloaded_bytes INTEGER DEFAULT 0,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                headers_json TEXT,
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER
+            );
             ",
         )?;
 
         // Safe migration for older tables
         let _ = conn.execute("ALTER TABLE repositories ADD COLUMN icon_url TEXT", []);
         let _ = conn.execute("ALTER TABLE repositories ADD COLUMN plugin_count INTEGER DEFAULT 0", []);
+        // v2: persist custom request headers so resume can replay them
+        let _ = conn.execute("ALTER TABLE downloads ADD COLUMN headers_json TEXT", []);
 
         Ok(())
     }
@@ -204,16 +227,17 @@ impl Database {
         }
     }
 
-    pub fn get_media_watch_history(&self, media_id: &str) -> Result<Vec<WatchHistoryItem>> {
+    pub fn get_media_watch_history(&self, media_id: &str, title: Option<&str>) -> Result<Vec<WatchHistoryItem>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, media_id, provider_id, title, poster_url, episode_num, season_num,
                     episode_name, position_ms, duration_ms, last_watched_at, is_completed
              FROM watch_history
              WHERE media_id = ?1
+                OR (?2 IS NOT NULL AND LOWER(title) = LOWER(?2))
              ORDER BY season_num ASC, episode_num ASC",
         )?;
-        let rows = stmt.query_map(params![media_id], |row| {
+        let rows = stmt.query_map(params![media_id, title], |row| {
             Ok(WatchHistoryItem {
                 id: Some(row.get(0)?),
                 media_id: row.get(1)?,
@@ -467,6 +491,205 @@ impl Database {
         conn.execute("DELETE FROM search_history", [])?;
         Ok(())
     }
+
+    pub fn upsert_download(&self, item: &DownloadDbRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "
+            INSERT INTO downloads (
+                id, parent_id, url, source_api, media_title, episode_title,
+                season_num, episode_num, tv_type, poster_url, file_path,
+                total_bytes, downloaded_bytes, status, error_message, headers_json,
+                created_at, completed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            ON CONFLICT(id) DO UPDATE SET
+                url = excluded.url,
+                total_bytes = excluded.total_bytes,
+                downloaded_bytes = excluded.downloaded_bytes,
+                status = excluded.status,
+                error_message = excluded.error_message,
+                headers_json = COALESCE(excluded.headers_json, downloads.headers_json),
+                completed_at = excluded.completed_at
+            ",
+            params![
+                item.id,
+                item.parent_id,
+                item.url,
+                item.source_api,
+                item.media_title,
+                item.episode_title,
+                item.season_num,
+                item.episode_num,
+                item.tv_type,
+                item.poster_url,
+                item.file_path,
+                item.total_bytes as i64,
+                item.downloaded_bytes as i64,
+                item.status,
+                item.error_message,
+                item.headers_json,
+                item.created_at,
+                item.completed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_downloads(&self) -> Result<Vec<DownloadDbRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_id, url, source_api, media_title, episode_title,
+                    season_num, episode_num, tv_type, poster_url, file_path,
+                    total_bytes, downloaded_bytes, status, error_message, headers_json,
+                    created_at, completed_at
+             FROM downloads
+             ORDER BY created_at DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let total_bytes_raw: i64 = row.get(11)?;
+            let downloaded_bytes_raw: i64 = row.get(12)?;
+
+            Ok(DownloadDbRecord {
+                id: row.get(0)?,
+                parent_id: row.get(1)?,
+                url: row.get(2)?,
+                source_api: row.get(3)?,
+                media_title: row.get(4)?,
+                episode_title: row.get(5)?,
+                season_num: row.get(6)?,
+                episode_num: row.get(7)?,
+                tv_type: row.get(8)?,
+                poster_url: row.get(9)?,
+                file_path: row.get(10)?,
+                total_bytes: total_bytes_raw.max(0) as u64,
+                downloaded_bytes: downloaded_bytes_raw.max(0) as u64,
+                status: row.get(13)?,
+                error_message: row.get(14)?,
+                headers_json: row.get(15)?,
+                created_at: row.get(16)?,
+                completed_at: row.get(17)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_download_by_id(&self, id: &str) -> Result<Option<DownloadDbRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_id, url, source_api, media_title, episode_title,
+                    season_num, episode_num, tv_type, poster_url, file_path,
+                    total_bytes, downloaded_bytes, status, error_message, headers_json,
+                    created_at, completed_at
+             FROM downloads
+             WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query_map(params![id], |row| {
+            let total_bytes_raw: i64 = row.get(11)?;
+            let downloaded_bytes_raw: i64 = row.get(12)?;
+
+            Ok(DownloadDbRecord {
+                id: row.get(0)?,
+                parent_id: row.get(1)?,
+                url: row.get(2)?,
+                source_api: row.get(3)?,
+                media_title: row.get(4)?,
+                episode_title: row.get(5)?,
+                season_num: row.get(6)?,
+                episode_num: row.get(7)?,
+                tv_type: row.get(8)?,
+                poster_url: row.get(9)?,
+                file_path: row.get(10)?,
+                total_bytes: total_bytes_raw.max(0) as u64,
+                downloaded_bytes: downloaded_bytes_raw.max(0) as u64,
+                status: row.get(13)?,
+                error_message: row.get(14)?,
+                headers_json: row.get(15)?,
+                created_at: row.get(16)?,
+                completed_at: row.get(17)?,
+            })
+        })?;
+
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn update_download_progress(
+        &self,
+        id: &str,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+        status: &str,
+        error_message: Option<&str>,
+        completed_at: Option<i64>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE downloads
+             SET downloaded_bytes = ?1,
+                 total_bytes = CASE WHEN ?2 > 0 THEN ?2 ELSE total_bytes END,
+                 status = ?3,
+                 error_message = ?4,
+                 completed_at = COALESCE(?5, completed_at)
+             WHERE id = ?6",
+            params![
+                downloaded_bytes as i64,
+                total_bytes as i64,
+                status,
+                error_message,
+                completed_at,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_download(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_downloads_batch(&self, ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for id in ids {
+            let _ = conn.execute("DELETE FROM downloads WHERE id = ?1", params![id]);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DownloadDbRecord {
+    pub id: String,
+    pub parent_id: String,
+    pub url: String,
+    pub source_api: String,
+    pub media_title: String,
+    pub episode_title: Option<String>,
+    pub season_num: Option<i32>,
+    pub episode_num: Option<i32>,
+    pub tv_type: String,
+    pub poster_url: Option<String>,
+    pub file_path: String,
+    pub total_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub status: String,
+    pub error_message: Option<String>,
+    /// JSON-serialised `HashMap<String, String>` of custom request headers.
+    /// Stored so that resume can replay auth / referer headers.
+    pub headers_json: Option<String>,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
 }
 
 #[cfg(test)]

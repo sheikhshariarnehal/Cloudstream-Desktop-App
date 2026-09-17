@@ -8,6 +8,8 @@ pub mod providers;
 pub mod proxy;
 pub mod subtitles;
 pub mod videoskip;
+pub mod directories;
+pub mod downloader;
 
 use database::Database;
 use engine::{EngineClient, EngineStatus};
@@ -33,6 +35,8 @@ pub struct AppState {
     pub skip_manager: Arc<SkipManager>,
     pub subtitle_manager: Arc<SubtitleManager>,
     pub player: Arc<player::MpvPlayer>,
+    pub app_data_dir: std::path::PathBuf,
+    pub download_manager: Arc<downloader::DownloadManager>,
 }
 
 fn clean_alphanumeric(s: &str) -> String {
@@ -1000,8 +1004,15 @@ async fn get_media_progress(media_id: String, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-async fn get_media_watch_history(media_id: String, state: State<'_, AppState>) -> Result<Vec<WatchHistoryItem>, String> {
-    state.db.get_media_watch_history(&media_id).map_err(|e| e.to_string())
+async fn get_media_watch_history(
+    media_id: String,
+    title: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<WatchHistoryItem>, String> {
+    state
+        .db
+        .get_media_watch_history(&media_id, title.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1438,6 +1449,275 @@ async fn restart_engine(state: State<'_, AppState>) -> Result<EngineStatus, Stri
     Ok(state.engine.get_status().await)
 }
 
+#[tauri::command]
+async fn get_storage_directories(
+    custom_download_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<directories::AppDirectoryInfo>, String> {
+    let mut list = Vec::new();
+
+    // 1. Extensions & Plugins Directory
+    let plugins_path = state.plugin_manager.plugins_dir().clone();
+    let (plugins_size, plugins_count) = directories::get_dir_size_and_count(&plugins_path);
+    let cs3_count = if plugins_path.exists() {
+        std::fs::read_dir(&plugins_path)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "cs3"))
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    list.push(directories::AppDirectoryInfo {
+        id: "extensions".to_string(),
+        name: "Extensions & Plugins Location".to_string(),
+        category: "Extensions".to_string(),
+        description: format!(
+            "Directory where {} installed .cs3 provider plugins and extension modules are stored and executed.",
+            cs3_count
+        ),
+        path: plugins_path.to_string_lossy().to_string(),
+        exists: plugins_path.exists(),
+        file_count: plugins_count,
+        total_bytes: plugins_size,
+        formatted_size: directories::format_bytes(plugins_size),
+        can_browse: false,
+        can_clear: false,
+        can_open: true,
+    });
+
+    // 2. Offline Downloads & Media Storage
+    let downloads_path = directories::resolve_download_dir(custom_download_path.as_deref());
+    let (down_size, down_count) = directories::get_dir_size_and_count(&downloads_path);
+    list.push(directories::AppDirectoryInfo {
+        id: "downloads".to_string(),
+        name: "Offline Downloads & Video Storage".to_string(),
+        category: "Storage".to_string(),
+        description: "Primary location for saved offline movies, TV series episodes, and anime video files.".to_string(),
+        path: downloads_path.to_string_lossy().to_string(),
+        exists: downloads_path.exists(),
+        file_count: down_count,
+        total_bytes: down_size,
+        formatted_size: directories::format_bytes(down_size),
+        can_browse: true,
+        can_clear: false,
+        can_open: true,
+    });
+
+    // 3. Application Data & SQLite Database
+    let app_data_path = state.app_data_dir.clone();
+    let db_path = app_data_path.join("cloudstream.db");
+    let (db_size, _) = directories::get_dir_size_and_count(&db_path);
+    let (app_data_size, app_data_count) = directories::get_dir_size_and_count(&app_data_path);
+    list.push(directories::AppDirectoryInfo {
+        id: "app_data".to_string(),
+        name: "Application Data & Database".to_string(),
+        category: "Database".to_string(),
+        description: format!(
+            "SQLite database (cloudstream.db: {}) containing watch history, bookmarks, plugin cache, and settings.",
+            directories::format_bytes(db_size)
+        ),
+        path: app_data_path.to_string_lossy().to_string(),
+        exists: app_data_path.exists(),
+        file_count: app_data_count,
+        total_bytes: app_data_size,
+        formatted_size: directories::format_bytes(app_data_size),
+        can_browse: false,
+        can_clear: false,
+        can_open: true,
+    });
+
+    // 4. Extension Engine & JVM Runtime
+    let engine_jar = crate::engine::EngineClient::find_engine_jar();
+    let engine_dir = if let Some(ref ej) = engine_jar {
+        ej.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+    let (engine_size, engine_count) = directories::get_dir_size_and_count(&engine_dir);
+    list.push(directories::AppDirectoryInfo {
+        id: "engine".to_string(),
+        name: "Extension Engine & JVM Runtime".to_string(),
+        category: "Runtime".to_string(),
+        description: "Contains the headless .cs3 bytecode runner (engine.jar), bundled JRE, and Android emulation stubs.".to_string(),
+        path: engine_dir.to_string_lossy().to_string(),
+        exists: engine_dir.exists(),
+        file_count: engine_count,
+        total_bytes: engine_size,
+        formatted_size: directories::format_bytes(engine_size),
+        can_browse: false,
+        can_clear: false,
+        can_open: true,
+    });
+
+    // 5. Streaming Cache & Temporary Buffers
+    let cache_path = state.app_data_dir.join("cache");
+    let (cache_size, cache_count) = directories::get_dir_size_and_count(&cache_path);
+    list.push(directories::AppDirectoryInfo {
+        id: "cache".to_string(),
+        name: "Streaming Cache & Buffers".to_string(),
+        category: "Cache".to_string(),
+        description: "Temporary HLS stream segments, downloaded subtitle caches, and video proxy buffers.".to_string(),
+        path: cache_path.to_string_lossy().to_string(),
+        exists: cache_path.exists(),
+        file_count: cache_count,
+        total_bytes: cache_size,
+        formatted_size: directories::format_bytes(cache_size),
+        can_browse: false,
+        can_clear: true,
+        can_open: true,
+    });
+
+    // 6. MPV Player Configuration & Shaders
+    let mpv_path = state.app_data_dir.join("mpv");
+    let (mpv_size, mpv_count) = directories::get_dir_size_and_count(&mpv_path);
+    list.push(directories::AppDirectoryInfo {
+        id: "mpv".to_string(),
+        name: "Player Config & Shaders".to_string(),
+        category: "Player".to_string(),
+        description: "Native MPV player configurations, custom video shaders, input scripts, and playback session logs.".to_string(),
+        path: mpv_path.to_string_lossy().to_string(),
+        exists: mpv_path.exists(),
+        file_count: mpv_count,
+        total_bytes: mpv_size,
+        formatted_size: directories::format_bytes(mpv_size),
+        can_browse: false,
+        can_clear: false,
+        can_open: true,
+    });
+
+    Ok(list)
+}
+
+#[tauri::command]
+async fn open_directory(path: String) -> Result<(), String> {
+    directories::open_path_in_explorer(&path)
+}
+
+#[tauri::command]
+async fn select_folder(default_path: Option<String>) -> Result<Option<String>, String> {
+    directories::pick_folder(default_path).await
+}
+
+#[tauri::command]
+async fn clear_directory_cache(
+    target: String,
+    state: State<'_, AppState>,
+) -> Result<directories::CacheClearResult, String> {
+    if target == "orphaned_plugins" {
+        let repo_plugins = state.db.get_all_repository_plugins().unwrap_or_default();
+        let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+
+        let removed = if repo_plugins.is_empty() {
+            uninstall_all_plugins_safely(&state).await?
+        } else {
+            let mut orphaned_names = Vec::new();
+            for inst in installed {
+                let belongs_to_repo = repo_plugins.iter().any(|rp| {
+                    rp.name.eq_ignore_ascii_case(&inst.name)
+                        || rp.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&inst.name)
+                        || inst.internal_name.as_deref().unwrap_or("").eq_ignore_ascii_case(&rp.name)
+                });
+                if !belongs_to_repo {
+                    orphaned_names.push(inst.name);
+                }
+            }
+            delete_plugins_safely(&orphaned_names, &state).await?
+        };
+
+        return Ok(directories::CacheClearResult {
+            freed_bytes: 0,
+            formatted_freed: format!("{} plugins cleaned", removed),
+            deleted_count: removed,
+            message: format!("Successfully cleaned {} orphaned plugin files.", removed),
+        });
+    }
+
+    let cache_dir = state.app_data_dir.join("cache");
+    let (freed, count) = directories::clear_dir_contents(&cache_dir);
+    Ok(directories::CacheClearResult {
+        freed_bytes: freed,
+        formatted_freed: directories::format_bytes(freed),
+        deleted_count: count,
+        message: format!("Cleared {} temporary files, freeing {}.", count, directories::format_bytes(freed)),
+    })
+}
+
+#[tauri::command]
+async fn start_download(
+    request: downloader::DownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    state.download_manager.start_download(request).await
+}
+
+#[tauri::command]
+async fn pause_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.download_manager.pause_download(&id).await
+}
+
+#[tauri::command]
+async fn resume_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.download_manager.resume_download(&id).await
+}
+
+#[tauri::command]
+async fn cancel_download(
+    id: String,
+    delete_file: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .download_manager
+        .cancel_download(&id, delete_file.unwrap_or(true))
+        .await
+}
+
+#[tauri::command]
+async fn retry_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.download_manager.retry_download(&id).await
+}
+
+#[tauri::command]
+async fn get_downloads(state: State<'_, AppState>) -> Result<Vec<downloader::DownloadItem>, String> {
+    state.download_manager.get_downloads().await
+}
+
+#[tauri::command]
+async fn delete_download(
+    id: String,
+    delete_file: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .download_manager
+        .delete_download(&id, delete_file.unwrap_or(true))
+        .await
+}
+
+#[tauri::command]
+async fn delete_downloads_batch(
+    ids: Vec<String>,
+    delete_files: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .download_manager
+        .delete_downloads_batch(ids, delete_files.unwrap_or(true))
+        .await
+}
+
+#[tauri::command]
+async fn get_storage_disk_info(
+    download_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<downloader::StorageDiskInfo, String> {
+    state.download_manager.get_storage_disk_info(download_path).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1455,7 +1735,7 @@ pub fn run() {
                 StreamProxy::start().await.expect("Failed to start M3U8 proxy")
             });
 
-            let plugin_manager = Arc::new(PluginManager::new(app_data_dir));
+            let plugin_manager = Arc::new(PluginManager::new(app_data_dir.clone()));
             let engine = Arc::new(EngineClient::new(None, Some(plugin_manager.plugins_dir().clone())));
             
             // Launch background check to ensure .cs3 headless engine is running.
@@ -1508,6 +1788,8 @@ pub fn run() {
                     .expect("Failed to initialize native MPV player"),
             );
 
+            let download_manager = Arc::new(downloader::DownloadManager::new(db.clone(), app.handle().clone()));
+
             app.manage(AppState {
                 db,
                 proxy: Arc::new(proxy),
@@ -1517,6 +1799,8 @@ pub fn run() {
                 skip_manager,
                 subtitle_manager,
                 player,
+                app_data_dir,
+                download_manager,
             });
 
             Ok(())
@@ -1583,6 +1867,19 @@ pub fn run() {
             player_set_gpu_video_processing,
             get_engine_status,
             restart_engine,
+            get_storage_directories,
+            open_directory,
+            select_folder,
+            clear_directory_cache,
+            start_download,
+            pause_download,
+            resume_download,
+            cancel_download,
+            retry_download,
+            get_downloads,
+            delete_download,
+            delete_downloads_batch,
+            get_storage_disk_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,12 +1,13 @@
 import React from 'react';
-import { Compass, Puzzle, Settings, Search } from 'lucide-react';
+import { Compass, Puzzle, Settings, Search, Download } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  activeDownloadsCount?: number;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, activeDownloadsCount }) => {
   return (
     <aside className="sidebar">
       {/* CloudStream Logo */}
@@ -31,8 +32,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
         >
           <div className="nav-icon-wrap">
             <svg
-              width="30"
-              height="30"
+              width="29"
+              height="29"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -104,8 +105,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
         >
           <div className="nav-icon-wrap">
             <svg
-              width="30"
-              height="30"
+              width="29"
+              height="29"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -126,6 +127,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             </svg>
           </div>
           <span className="nav-label">Library</span>
+        </button>
+
+        {/* Downloads */}
+        <button
+          className={`nav-btn ${activeTab === 'downloads' ? 'active' : ''}`}
+          onClick={() => setActiveTab('downloads')}
+          aria-label="Downloads"
+          title="Offline Downloads"
+        >
+          <div className="nav-icon-wrap" style={{ position: 'relative' }}>
+            <Download size={29} strokeWidth={activeTab === 'downloads' ? 2.5 : 2.1} />
+            {activeDownloadsCount !== undefined && activeDownloadsCount > 0 && (
+              <span className="sidebar-badge-count">{activeDownloadsCount}</span>
+            )}
+          </div>
+          <span className="nav-label">Downloads</span>
         </button>
 
         {/* Addons / Plugins */}

@@ -1,15 +1,64 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSettings } from '../../../hooks/useSettings';
+import { invoke } from '@tauri-apps/api/core';
+import { FolderOpen, Trash2, CheckCircle2 } from 'lucide-react';
+import { AppDirectoryInfo, CacheClearResult } from '../../../types';
 
 export const StreamingTab: React.FC = () => {
   const { settings, updateSetting } = useSettings();
+  const [cacheInfo, setCacheInfo] = useState<AppDirectoryInfo | null>(null);
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearMessage, setClearMessage] = useState<string | null>(null);
 
-  const handleClearCache = () => {
-    alert('Temporary streaming chunks, torrent buffers, and HLS segments cleared from disk.');
+  const fetchCacheInfo = async () => {
+    try {
+      const dirs: AppDirectoryInfo[] = await invoke('get_storage_directories', {
+        customDownloadPath: settings.downloadPath || null,
+      });
+      const found = dirs.find((d) => d.id === 'cache');
+      if (found) setCacheInfo(found);
+    } catch (e) {
+      console.error('Failed to get cache directory info:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchCacheInfo();
+  }, []);
+
+  const handleClearCache = async () => {
+    setIsClearing(true);
+    try {
+      const res: CacheClearResult = await invoke('clear_directory_cache', { target: 'cache' });
+      setClearMessage(res.message);
+      await fetchCacheInfo();
+      setTimeout(() => setClearMessage(null), 4000);
+    } catch (e) {
+      console.error('Failed to clear streaming cache:', e);
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const handleOpenCacheFolder = async () => {
+    if (cacheInfo) {
+      try {
+        await invoke('open_directory', { path: cacheInfo.path });
+      } catch (e) {
+        console.error('Failed to open cache directory:', e);
+      }
+    }
   };
 
   return (
     <div className="stremio-settings-tab-pane animate-fade-in">
+      {clearMessage && (
+        <div className="settings-success-banner animate-fade-in" style={{ marginBottom: '16px' }}>
+          <CheckCircle2 size={16} />
+          <span>{clearMessage}</span>
+        </div>
+      )}
+
       {/* DNS over HTTPS (DoH) */}
       <div className="stremio-setting-row">
         <div className="stremio-setting-label-col">
@@ -135,17 +184,56 @@ export const StreamingTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Clear Temporary Cache */}
+      {/* Streaming Disk Cache Row */}
       <div className="stremio-setting-row">
         <div className="stremio-setting-label-col">
-          <span className="stremio-setting-label">Streaming Disk Cache</span>
-          <span className="stremio-setting-subtext">Free up disk space occupied by cached video segments</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span className="stremio-setting-label">Streaming Disk Cache</span>
+            {cacheInfo && (
+              <span
+                className="settings-badge"
+                style={{
+                  background: 'rgba(244, 63, 94, 0.15)',
+                  color: '#fda4af',
+                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                }}
+              >
+                {cacheInfo.file_count} Files • {cacheInfo.formatted_size}
+              </span>
+            )}
+          </div>
+          <span className="stremio-setting-subtext">
+            Free up disk space occupied by cached HLS video segments and stream buffers
+          </span>
         </div>
-        <button className="settings-btn-subtle" onClick={handleClearCache}>
-          Clear Streaming Cache
-        </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {cacheInfo && (
+            <button
+              className="btn-secondary"
+              onClick={handleOpenCacheFolder}
+              style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}
+              title="Open cache folder in File Explorer"
+            >
+              <FolderOpen size={13} />
+              <span>Open Folder</span>
+            </button>
+          )}
+
+          <button
+            className="btn-secondary"
+            onClick={handleClearCache}
+            disabled={isClearing}
+            style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: '#f43f5e' }}
+            title="Clear temporary stream cache"
+          >
+            <Trash2 size={13} />
+            <span>{isClearing ? 'Clearing...' : 'Clear Cache'}</span>
+          </button>
+        </div>
       </div>
     </div>
   );
 };
+
 

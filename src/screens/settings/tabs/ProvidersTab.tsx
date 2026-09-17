@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useSettings } from '../../../hooks/useSettings';
-import { Check, Cpu, RefreshCw, Download } from 'lucide-react';
+import { Check, Cpu, RefreshCw, Download, FolderOpen, Copy, CheckCheck, Trash2, HardDrive } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { LANGUAGES } from '../../../utils/subtitleHelper';
-import { EngineStatus } from '../../../types';
+import { EngineStatus, AppDirectoryInfo, CacheClearResult } from '../../../types';
 
 const TV_TYPES = [
   { id: 'Movie', label: 'Movies' },
@@ -21,6 +21,22 @@ export const ProvidersTab: React.FC = () => {
   const { settings, updateSetting } = useSettings();
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [extDir, setExtDir] = useState<AppDirectoryInfo | null>(null);
+  const [copiedPath, setCopiedPath] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [cleanNotice, setCleanNotice] = useState<string | null>(null);
+
+  const fetchDirectory = async () => {
+    try {
+      const dirs: AppDirectoryInfo[] = await invoke('get_storage_directories', {
+        customDownloadPath: settings.downloadPath || null,
+      });
+      const found = dirs.find((d) => d.id === 'extensions');
+      if (found) setExtDir(found);
+    } catch (e) {
+      console.error('Failed to get extension directory info:', e);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -33,18 +49,48 @@ export const ProvidersTab: React.FC = () => {
       }
     };
     fetchStatus();
+    fetchDirectory();
     return () => { mounted = false; };
-  }, []);
+  }, [settings.downloadPath]);
 
   const handleRestartEngine = async () => {
     setIsRestarting(true);
     try {
       const st: EngineStatus = await invoke('restart_engine');
       setEngineStatus(st);
+      await fetchDirectory();
     } catch (e) {
       console.error('Failed to restart engine:', e);
     } finally {
       setIsRestarting(false);
+    }
+  };
+
+  const handleOpenFolder = async (path: string) => {
+    try {
+      await invoke('open_directory', { path });
+    } catch (e) {
+      console.error('Failed to open directory:', e);
+    }
+  };
+
+  const handleCopyPath = (path: string) => {
+    navigator.clipboard.writeText(path);
+    setCopiedPath(true);
+    setTimeout(() => setCopiedPath(false), 2000);
+  };
+
+  const handleCleanOrphaned = async () => {
+    setIsCleaning(true);
+    try {
+      const res: CacheClearResult = await invoke('clear_directory_cache', { target: 'orphaned_plugins' });
+      setCleanNotice(res.message);
+      await fetchDirectory();
+      setTimeout(() => setCleanNotice(null), 4000);
+    } catch (e) {
+      console.error('Failed to clean orphaned plugins:', e);
+    } finally {
+      setIsCleaning(false);
     }
   };
 
@@ -190,6 +236,111 @@ export const ProvidersTab: React.FC = () => {
           />
           <span className="stremio-switch-slider" />
         </label>
+      </div>
+
+      {/* Extensions Save Location & Management */}
+      <div className="stremio-settings-section-divider" style={{ margin: '24px 0 16px', borderTop: '1px solid rgba(255,255,255,0.08)' }} />
+
+      <div className="stremio-setting-row" style={{ alignItems: 'flex-start', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
+          <div className="stremio-setting-label-col">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FolderOpen size={18} color="#a78bfa" />
+              <span className="stremio-setting-label">Extensions Save Location</span>
+              {extDir && (
+                <span className="settings-badge" style={{ background: 'rgba(167, 139, 250, 0.15)', color: '#c4b5fd', border: '1px solid rgba(167, 139, 250, 0.3)' }}>
+                  {extDir.file_count} Files • {extDir.formatted_size}
+                </span>
+              )}
+            </div>
+            <span className="stremio-setting-subtext">
+              Local filesystem directory where CloudStream .cs3 provider extension files are stored and executed
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {extDir && (
+              <button
+                className="btn-secondary"
+                onClick={() => handleOpenFolder(extDir.path)}
+                style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                title="Open extensions folder in File Explorer"
+              >
+                <FolderOpen size={14} />
+                <span>Open in Explorer</span>
+              </button>
+            )}
+
+            <button
+              className="btn-secondary"
+              onClick={handleCleanOrphaned}
+              disabled={isCleaning}
+              style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171' }}
+              title="Remove orphaned or corrupted plugin files"
+            >
+              <Trash2 size={13} />
+              <span>{isCleaning ? 'Cleaning...' : 'Clean Orphaned'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Path Display & Action Pill */}
+        {extDir && (
+          <div
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'rgba(23, 20, 45, 0.65)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '8px',
+              padding: '10px 14px',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+              <HardDrive size={15} color="#94a3b8" style={{ flexShrink: 0 }} />
+              <span
+                style={{
+                  fontFamily: 'Consolas, monospace',
+                  fontSize: '12.5px',
+                  color: '#e2e8f0',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  userSelect: 'all',
+                }}
+                title={extDir.path}
+              >
+                {extDir.path}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+              <button
+                className="settings-btn-subtle"
+                onClick={() => handleCopyPath(extDir.path)}
+                style={{ padding: '4px 10px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                title="Copy path to clipboard"
+              >
+                {copiedPath ? <CheckCheck size={13} color="#10b981" /> : <Copy size={13} />}
+                <span>{copiedPath ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {cleanNotice && (
+          <div style={{ fontSize: '12px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCheck size={14} />
+            <span>{cleanNotice}</span>
+          </div>
+        )}
+
+        <div style={{ fontSize: '11.5px', color: '#94a3b8', background: 'rgba(255, 255, 255, 0.03)', padding: '8px 12px', borderRadius: '6px', width: '100%' }}>
+          💡 <strong style={{ color: '#e2e8f0' }}>Tip:</strong> You can directly paste or drop custom <code style={{ color: '#a78bfa' }}>.cs3</code> plugin files into this folder and click <strong>Restart Engine</strong> below to load them instantly.
+        </div>
       </div>
 
       {/* Extension Engine Diagnostics & Health */}

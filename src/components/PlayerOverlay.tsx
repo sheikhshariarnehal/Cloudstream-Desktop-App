@@ -807,7 +807,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
             last_watched_at: Date.now(),
             is_completed: cur / dur > 0.9,
           },
-        }).catch(() => {});
+        })
+          .then(() => {
+            window.dispatchEvent(new CustomEvent('cloudstream-watch-progress-saved'));
+          })
+          .catch(() => {});
       }
     };
     const interval = setInterval(saveProgress, 5000);
