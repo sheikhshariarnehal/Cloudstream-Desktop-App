@@ -43,10 +43,52 @@ function resolveCountry(): string {
   }
 }
 
+// In-memory queue for client-side batching to minimize network requests and database load
+let eventQueue: any[] = [];
+let flushTimeout: any = null;
+const BATCH_FLUSH_INTERVAL_MS = 3000;
+const BATCH_MAX_SIZE = 15;
+
 /**
- * Emits a telemetry event asynchronously without blocking UI or media playback.
+ * Flushes all pending telemetry events in a single batch request.
  */
-export async function track(event: string, properties: Record<string, any> = {}): Promise<void> {
+export async function flushEvents(): Promise<void> {
+  if (typeof window === 'undefined' || eventQueue.length === 0) return;
+
+  const batchToSend = [...eventQueue];
+  eventQueue = [];
+  if (flushTimeout) {
+    clearTimeout(flushTimeout);
+    flushTimeout = null;
+  }
+
+  try {
+    const payload = JSON.stringify(batchToSend.length === 1 ? batchToSend[0] : { batch: batchToSend });
+
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: 'application/json' });
+      const sent = navigator.sendBeacon(OPENPULSE_ENDPOINT + '?api_key=' + OPENPULSE_API_KEY, blob);
+      if (sent) return;
+    }
+
+    await fetch(OPENPULSE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-OpenPulse-Key': OPENPULSE_API_KEY,
+      },
+      body: payload,
+      keepalive: true,
+    });
+  } catch {
+    // Fail silently in development/offline so user experience is never degraded
+  }
+}
+
+/**
+ * Emits a telemetry event into the high-throughput queue with automatic batch flushing.
+ */
+export async function track(event: string, properties: Record<string, any> = {}, immediate = false): Promise<void> {
   if (typeof window === 'undefined') return;
 
   try {
@@ -59,29 +101,31 @@ export async function track(event: string, properties: Record<string, any> = {})
 
     const path = properties.path || properties.screen || (event === '$screen_view' ? '/home' : `/${event.replace('$', '')}`);
 
-    await fetch(OPENPULSE_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-OpenPulse-Key': OPENPULSE_API_KEY,
+    eventQueue.push({
+      event,
+      distinctId,
+      properties: {
+        app: 'CloudStream-Desktop',
+        platform: 'desktop_tauri',
+        os,
+        browser: 'CloudStream Desktop',
+        country: resolveCountry(),
+        path,
+        timestamp: new Date().toISOString(),
+        ...properties,
       },
-      body: JSON.stringify({
-        event,
-        distinctId,
-        properties: {
-          app: 'CloudStream-Desktop',
-          platform: 'desktop_tauri',
-          os,
-          browser: 'CloudStream Desktop',
-          country: resolveCountry(),
-          path,
-          timestamp: new Date().toISOString(),
-          ...properties,
-        },
-      }),
     });
+
+    if (immediate || eventQueue.length >= BATCH_MAX_SIZE) {
+      await flushEvents();
+    } else if (!flushTimeout) {
+      flushTimeout = setTimeout(() => {
+        flushTimeout = null;
+        flushEvents();
+      }, BATCH_FLUSH_INTERVAL_MS);
+    }
   } catch {
-    // Fail silently in development/offline so user experience is never degraded
+    // Fail silently
   }
 }
 
@@ -187,11 +231,16 @@ export function initTelemetry(): void {
     });
   });
 
-  // 5. Automatic periodic active session heartbeat (every 25 seconds)
+  // 5. Automatic periodic active session heartbeat (every 30 seconds)
   setInterval(() => {
     track('$heartbeat', {
       path: window.location?.pathname || '/app',
     });
-  }, 25000);
+  }, 30000);
+
+  // 6. Flush queue before app/tab closes
+  window.addEventListener('beforeunload', () => {
+    flushEvents();
+  });
 }
 

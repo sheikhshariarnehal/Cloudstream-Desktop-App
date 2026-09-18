@@ -6,26 +6,27 @@ interface HomeCatalogSkeletonProps {
 
 export const HomeCatalogSkeleton: React.FC<HomeCatalogSkeletonProps> = () => {
   return (
-    <div className="home-skeleton-container" style={{ padding: '0 0 60px 0', animation: 'fadeIn 0.25s ease' }}>
-      {/* Hero Banner Skeleton */}
+    <div className="home-skeleton-container" style={{ animation: 'fadeIn 0.2s ease', background: 'transparent' }}>
+      {/* Hero Banner Skeleton — flat, neutral, no background box, no borders, no glow, no blur */}
       <div
         className="skeleton-hero"
         style={{
+          width: '100%',
           height: '420px',
-          borderRadius: '24px',
-          margin: '12px 28px 40px 28px',
           position: 'relative',
           overflow: 'hidden',
-          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(124, 58, 237, 0.08) 100%)',
-          border: '1px solid rgba(255, 255, 255, 0.06)',
+          marginBottom: '20px',
+          background: 'transparent',
+          border: 'none',
+          boxShadow: 'none',
+          outline: 'none',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'flex-end',
-          padding: '44px',
-          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)',
+          padding: '48px 40px',
+          boxSizing: 'border-box',
         }}
       >
-        {/* Shimmer Overlay */}
         <div className="skeleton-shimmer" style={{ position: 'absolute', inset: 0 }} />
 
         {/* Hero Content Skeletons */}
@@ -33,102 +34,102 @@ export const HomeCatalogSkeleton: React.FC<HomeCatalogSkeletonProps> = () => {
           {/* Spotlight Tag Placeholder */}
           <div
             style={{
-              width: '140px',
+              width: '130px',
               height: '18px',
               borderRadius: '6px',
-              background: 'rgba(255, 255, 255, 0.08)',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: 'none',
+              boxShadow: 'none',
             }}
           />
 
           {/* Title Placeholder */}
           <div
             style={{
-              width: '75%',
-              height: '44px',
-              borderRadius: '12px',
-              background: 'rgba(255, 255, 255, 0.1)',
+              width: '65%',
+              height: '40px',
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.07)',
+              border: 'none',
+              boxShadow: 'none',
             }}
           />
 
           {/* Meta Tags Row */}
           <div style={{ display: 'flex', gap: '10px' }}>
-            <div style={{ width: '56px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.07)' }} />
-            <div style={{ width: '64px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.07)' }} />
-            <div style={{ width: '50px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.07)' }} />
-            <div style={{ width: '80px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.07)' }} />
+            <div style={{ width: '56px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.05)', border: 'none', boxShadow: 'none' }} />
+            <div style={{ width: '64px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.05)', border: 'none', boxShadow: 'none' }} />
+            <div style={{ width: '50px', height: '20px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.05)', border: 'none', boxShadow: 'none' }} />
           </div>
 
           {/* Description Lines */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-            <div style={{ width: '90%', height: '14px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.06)' }} />
-            <div style={{ width: '65%', height: '14px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.06)' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+            <div style={{ width: '85%', height: '14px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.05)', border: 'none', boxShadow: 'none' }} />
+            <div style={{ width: '60%', height: '14px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.04)', border: 'none', boxShadow: 'none' }} />
           </div>
 
-          {/* Action Buttons Skeleton */}
-          <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
-            <div style={{ width: '128px', height: '42px', borderRadius: '12px', background: 'rgba(124, 58, 237, 0.4)' }} />
-            <div style={{ width: '148px', height: '42px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.08)' }} />
+          {/* Action Buttons Skeleton — neutral monochrome, no purple glow/color */}
+          <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+            <div style={{ width: '120px', height: '38px', borderRadius: '8px', background: 'rgba(255, 255, 255, 0.08)', border: 'none', boxShadow: 'none' }} />
+            <div style={{ width: '140px', height: '38px', borderRadius: '8px', background: 'rgba(255, 255, 255, 0.05)', border: 'none', boxShadow: 'none' }} />
           </div>
         </div>
       </div>
 
-      {/* Shelf Skeletons (3 Rows) */}
-      {[1, 2, 3].map((shelfIdx) => (
-        <div key={shelfIdx} style={{ margin: '0 28px 36px 28px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {/* Shelf Title Placeholder */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div
-              style={{
-                width: shelfIdx === 1 ? '180px' : shelfIdx === 2 ? '220px' : '150px',
-                height: '24px',
-                borderRadius: '8px',
-                background: 'rgba(255, 255, 255, 0.09)',
-              }}
-            />
-            <div style={{ width: '60px', height: '18px', borderRadius: '6px', background: 'rgba(255, 255, 255, 0.04)' }} />
-          </div>
-
-          {/* Cards Row Placeholder */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-              gap: '16px',
-              overflow: 'hidden',
-            }}
-          >
-            {[1, 2, 3, 4, 5, 6, 7].map((cardIdx) => (
-              <div
-                key={cardIdx}
-                style={{
-                  aspectRatio: '2 / 3',
-                  borderRadius: '16px',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.02) 100%)',
-                  border: '1px solid rgba(255, 255, 255, 0.05)',
-                }}
-              >
-                <div className="skeleton-shimmer" style={{ position: 'absolute', inset: 0 }} />
+      {/* Media Shelves Skeletons — matching stremio-board-container layout */}
+      <div className="stremio-board-container" style={{ background: 'transparent', border: 'none', boxShadow: 'none' }}>
+        {[1, 2, 3].map((shelfIdx) => (
+          <div key={shelfIdx} className="media-shelf-container" style={{ border: 'none', boxShadow: 'none' }}>
+            {/* Shelf Header */}
+            <div className="media-shelf-header" style={{ border: 'none', boxShadow: 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div
                   style={{
-                    position: 'absolute',
-                    bottom: '12px',
-                    left: '12px',
-                    right: '12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
+                    width: shelfIdx === 1 ? '190px' : shelfIdx === 2 ? '230px' : '160px',
+                    height: '24px',
+                    borderRadius: '6px',
+                    background: 'rgba(255, 255, 255, 0.07)',
+                    border: 'none',
+                    boxShadow: 'none',
                   }}
-                >
-                  <div style={{ width: '80%', height: '12px', borderRadius: '4px', background: 'rgba(255, 255, 255, 0.12)' }} />
-                  <div style={{ width: '45%', height: '10px', borderRadius: '4px', background: 'rgba(255, 255, 255, 0.07)' }} />
-                </div>
+                />
               </div>
-            ))}
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'rgba(255, 255, 255, 0.03)', border: 'none', boxShadow: 'none' }} />
+                <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'rgba(255, 255, 255, 0.03)', border: 'none', boxShadow: 'none' }} />
+              </div>
+            </div>
+
+            {/* 8-Card Row matching actual desktop shelf layout — pure flat, no border rim, no glow */}
+            <div className="media-shelf-row" style={{ border: 'none', boxShadow: 'none' }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8].map((cardIdx) => (
+                <div key={cardIdx} className="media-shelf-item" style={{ border: 'none', boxShadow: 'none' }}>
+                  <div
+                    style={{
+                      width: '100%',
+                      aspectRatio: '2 / 3',
+                      borderRadius: '12px',
+                      overflow: 'hidden',
+                      position: 'relative',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      border: 'none',
+                      boxShadow: 'none',
+                      outline: 'none',
+                    }}
+                  >
+                    <div className="skeleton-shimmer" style={{ position: 'absolute', inset: 0 }} />
+                  </div>
+                  {/* Title & subtitle placeholders matching centered card typography */}
+                  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
+                    <div style={{ width: '75%', height: '11px', borderRadius: '4px', background: 'rgba(255, 255, 255, 0.06)', border: 'none', boxShadow: 'none' }} />
+                    <div style={{ width: '45%', height: '9px', borderRadius: '4px', background: 'rgba(255, 255, 255, 0.03)', border: 'none', boxShadow: 'none' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 };

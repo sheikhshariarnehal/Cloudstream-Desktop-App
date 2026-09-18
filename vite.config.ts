@@ -33,5 +33,21 @@ export default defineConfig(() => ({
     // Tauri uses Chromium on Windows and WebKit on macOS/Linux
     target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : ['es2021', 'chrome100', 'safari14'],
     cssTarget: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : ['chrome100', 'safari14'],
+    // Enable CSS minification (removes ~40% of the 204KB App.css)
+    cssMinify: true,
+    // Split vendor code from app code for better caching.
+    // Vite 8 / Rolldown requires manualChunks as a function.
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
+            return 'react-vendor';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'icons';
+          }
+        },
+      },
+    },
   },
 }));

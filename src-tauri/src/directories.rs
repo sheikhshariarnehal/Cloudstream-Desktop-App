@@ -167,9 +167,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
                 initial, initial
             );
 
-            let output = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
-                .output()
+            let mut cmd = Command::new("powershell");
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            let output = cmd.output()
                 .map_err(|e| format!("Failed to launch folder picker: {}", e))?;
 
             if output.status.success() {

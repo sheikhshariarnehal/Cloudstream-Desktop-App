@@ -616,11 +616,7 @@ export const App: React.FC = () => {
   }, [searchEngine]);
 
   useEffect(() => {
-    loadExtensions();
-    const initialExt = localStorage.getItem('cloudstream_selected_extension') || '';
-    if (initialExt && initialExt !== 'all' && initialExt !== 'random' && initialExt !== 'none') {
-      loadHome(initialExt);
-    }
+    // Lightweight DB reads fire immediately (no engine dependency)
     loadLibraryData();
 
     // Check engine status immediately on startup
@@ -634,12 +630,22 @@ export const App: React.FC = () => {
     };
     checkEngine();
 
+    // Optimistic initial load: try loading extensions from the (possibly still starting) engine.
+    // If this returns empty results, engine-ready will reload them with full data.
+    loadExtensions();
+    const initialExt = localStorage.getItem('cloudstream_selected_extension') || '';
+    if (initialExt && initialExt !== 'all' && initialExt !== 'random' && initialExt !== 'none') {
+      // SWR cache in useHomeViewModel gives instant paint; this revalidates in background.
+      loadHome(initialExt);
+    }
+
     // When the Rust backend finishes starting the engine + loading all plugins,
-    // it emits 'engine-ready'. Auto-reload so the user never sees an empty page.
+    // it emits 'engine-ready'. Reload extensions + home once (not a duplicate burst).
     const unlistenReady = listen('engine-ready', () => {
       console.log('[App] engine-ready received — reloading extensions + home');
       checkEngine();
       loadExtensions();
+      // loadHome will be called by loadExtensions -> setSelectedExtension chain
     });
 
     const unlistenError = listen<EngineStatus>('engine-error', (event) => {
@@ -1066,8 +1072,8 @@ export const App: React.FC = () => {
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} activeDownloadsCount={activeDownloadsCount} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-        {/* Top Slim Glow Progress Bar on any catalog loading or extension switching */}
-        {(loadingShelves || isRefreshing || isSwitchingProvider) && (
+        {/* Top Slim Progress Bar only during background refreshes when content already exists */}
+        {(isRefreshing || (loadingShelves && shelves.length > 0 && !isSwitchingProvider)) && (
           <div className="top-loading-bar" />
         )}
 
@@ -1268,9 +1274,7 @@ export const App: React.FC = () => {
                   />
                 )}
                 <span className="stremio-ext-badge-text">
-                  {isSwitchingProvider
-                    ? `Switching to ${selectedExtension}...`
-                    : extensions.length === 0 && isExtensionsLoading
+                  {extensions.length === 0 && isExtensionsLoading
                     ? selectedExtension || 'Loading...'
                     : extensions.length === 0
                     ? 'No Extensions'
@@ -1606,23 +1610,11 @@ export const App: React.FC = () => {
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
                 <div style={{ position: 'relative' }}>
-                  {isSwitchingProvider && (
-                    <div className="catalog-switching-overlay">
-                      <div className="catalog-switching-pill">
-                        <Loader2 size={18} className="animate-spin" color="var(--stremio-purple-light)" />
-                        <span>Loading {selectedExtension} catalog...</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div
-                    style={{
-                      opacity: isSwitchingProvider ? 0.35 : 1,
-                      filter: isSwitchingProvider ? 'blur(3px)' : 'none',
-                      transition: 'opacity 0.25s ease, filter 0.25s ease',
-                      pointerEvents: isSwitchingProvider ? 'none' : 'auto',
-                    }}
-                  >
+                  {isSwitchingProvider ? (
+                    /* Clean skeleton loading while switching providers — no blur, no floating pill */
+                    <HomeCatalogSkeleton />
+                  ) : (
+                  <div>
                     {/* Stremio Hero Spotlight Carousel with CloudStream Preview Parity */}
                     {heroBannerItems.length > 0 && (
                       <HeroBanner
@@ -1779,6 +1771,7 @@ export const App: React.FC = () => {
                     ))}
                   </div>
                   </div>
+                  )}
                 </div>
               )}
             </div>

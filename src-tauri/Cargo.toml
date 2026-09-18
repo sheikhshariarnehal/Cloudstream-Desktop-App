@@ -21,6 +21,7 @@ zip-extract = "0.1"
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -64,10 +65,11 @@ winapi = { version = "0.3.9", features = [
 ] }
 
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+# Build optimization: thin LTO provides ~95% of full LTO's perf gain but builds 2-3x faster.
+# codegen-units=1 forced single-threaded linking (3.5+ min builds); 16 allows parallelism.
 [profile.release]
-codegen-units = 1
-lto = true
+codegen-units = 16
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true

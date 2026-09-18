@@ -159,9 +159,18 @@ impl EngineClient {
         }
 
         // Fallback: check if "java" in PATH responds
-        if let Ok(output) = Command::new("java").arg("-version").output() {
-            if output.status.success() || !output.stderr.is_empty() {
-                return Some(PathBuf::from("java"));
+        {
+            let mut cmd = Command::new("java");
+            cmd.arg("-version");
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            if let Ok(output) = cmd.output() {
+                if output.status.success() || !output.stderr.is_empty() {
+                    return Some(PathBuf::from("java"));
+                }
             }
         }
 
@@ -240,8 +249,12 @@ impl EngineClient {
     /// Kill any process listening on our engine port so we can start fresh.
     #[cfg(target_os = "windows")]
     fn kill_engine_on_port(port: u16) {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         let output = std::process::Command::new("netstat")
             .args(["-ano", "-p", "TCP"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(out) = output {
             let text = String::from_utf8_lossy(&out.stdout);
@@ -253,6 +266,7 @@ impl EngineClient {
                             if pid > 4 {
                                 let _ = std::process::Command::new("taskkill")
                                     .args(["/PID", &pid.to_string(), "/F"])
+                                    .creation_flags(CREATE_NO_WINDOW)
                                     .output();
                                 println!("[EngineClient] Killed stale engine process PID {}", pid);
                             }
@@ -337,17 +351,21 @@ impl EngineClient {
         let mut cmd = Command::new(&java_bin);
         cmd.current_dir(&jar_dir);
         cmd.args([
-            // Disable strict JVM bytecode verification.
-            // DEX-to-JVM translated classes (from .cs3 plugins) have mismatched
-            // StackMapTable entries that fail Java 13+ verification but run fine at runtime.
-            "-Xverify:none",
-            // Tier 1 C1 compilation starts up up to 3x-4x faster than default C2 tiered server compiler
+            // Relax bytecode verification for DEX-to-JVM translated .cs3 plugin classes.
+            // BytecodeVerificationLocal is a diagnostic flag — must unlock first.
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:-BytecodeVerificationLocal",
+            // Tier 1 C1 compilation starts up 3x-4x faster than default C2 tiered server compiler
             "-XX:TieredStopAtLevel=1",
+            // Serial GC uses 30-50% less baseline memory than G1GC for small server apps
+            "-XX:+UseSerialGC",
+            // Compressed object pointers — saves ~20% heap on 64-bit JVMs
+            "-XX:+UseCompressedOops",
             // Headless runtime flag to skip AWT/GUI subsystem init
             "-Djava.awt.headless=true",
-            // Initial memory allocation for quick startup
-            "-Xms32m",
-            "-Xmx512m",
+            // Lean memory allocation: 16MB initial, 256MB cap (engine is a small HTTP server)
+            "-Xms16m",
+            "-Xmx256m",
             "-cp", &cp,
             main_class,
             "--server",

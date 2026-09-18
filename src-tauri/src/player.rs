@@ -172,7 +172,7 @@ impl MpvPlayer {
             }
             let _ = init.set_property("title", "CloudStream Desktop");
             let _ = init.set_property("audio-client-name", "CloudStream");
-            let _ = init.set_property("terminal", "yes");
+            let _ = init.set_property("terminal", "no");
             let _ = init.set_property("idle", "yes");
             let _ = init.set_property("force-window", "yes");
             let _ = init.set_property("background-color", "#000000");
@@ -232,7 +232,7 @@ impl MpvPlayer {
             let _ = init.set_property("quiet", "yes");
 
             #[cfg(debug_assertions)]
-            let _ = init.set_property("msg-level", "all=no,cplayer=debug");
+            let _ = init.set_property("msg-level", "all=no");
             #[cfg(not(debug_assertions))]
             let _ = init.set_property("msg-level", "all=no");
 

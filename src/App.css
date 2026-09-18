@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
+/* Fonts loaded asynchronously via <link rel="preload"> in index.html to avoid render-blocking */
 
 :root {
   /* Exact Stremio Gradient Palette (#0C0B12 to #19173A) */
@@ -10428,31 +10428,21 @@ body, html, #root {
    Extension Switching & Catalog Loading Animations
 ========================================================= */
 
-/* Top slim progress bar */
+/* Top slim progress bar — minimal flat line, no glow, no shadow */
 .top-loading-bar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: 2.5px;
+  height: 2px;
   z-index: 10000;
-  background: linear-gradient(90deg, #7c3aed, #a855f7, #38bdf8, #818cf8, #7c3aed);
-  background-size: 250% 100%;
-  animation: top-bar-glow 1.4s infinite linear;
-  box-shadow: 0 0 12px rgba(168, 85, 247, 0.85), 0 0 6px rgba(56, 189, 248, 0.6);
+  background: var(--stremio-purple-light, #a855f7);
+  box-shadow: none !important;
+  filter: none !important;
   pointer-events: none;
 }
 
-@keyframes top-bar-glow {
-  0% {
-    background-position: 250% 0;
-  }
-  100% {
-    background-position: -250% 0;
-  }
-}
-
-/* Shimmer gradient animation for skeleton loaders */
+/* Shimmer gradient animation for skeleton loaders — pure neutral monochrome, no glow, no borders */
 @keyframes skeleton-shimmer {
   0% {
     background-position: -200% 0;
@@ -10465,66 +10455,27 @@ body, html, #root {
 .skeleton-shimmer {
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.02) 25%,
-    rgba(124, 58, 237, 0.12) 50%,
-    rgba(255, 255, 255, 0.02) 75%
+    transparent 0%,
+    rgba(255, 255, 255, 0.04) 50%,
+    transparent 100%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 2s infinite ease-in-out;
   pointer-events: none;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
 }
 
-/* Extension Badge Pill Loading State */
+/* Extension Badge Pill Loading State — clean flat state, no glow, no border rim */
 .stremio-ext-badge-loading {
-  border-color: rgba(168, 85, 247, 0.5) !important;
-  background: rgba(124, 58, 237, 0.18) !important;
-  box-shadow: 0 0 16px rgba(124, 58, 237, 0.3) !important;
-  animation: ext-badge-pulse 1.8s infinite ease-in-out;
+  border-color: transparent !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  box-shadow: none !important;
+  animation: none !important;
 }
 
-@keyframes ext-badge-pulse {
-  0%, 100% {
-    border-color: rgba(168, 85, 247, 0.4);
-    box-shadow: 0 0 12px rgba(124, 58, 237, 0.2);
-  }
-  50% {
-    border-color: rgba(168, 85, 247, 0.85);
-    box-shadow: 0 0 20px rgba(168, 85, 247, 0.45);
-  }
-}
-
-/* Catalog Switching Floating Overlay */
-.catalog-switching-overlay {
-  position: absolute;
-  top: 120px;
-  left: 0;
-  right: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 25;
-  pointer-events: none;
-  animation: fadeIn 0.2s ease-out;
-}
-
-.catalog-switching-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 24px;
-  border-radius: 9999px;
-  background: rgba(18, 15, 36, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(168, 85, 247, 0.4);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6), 0 0 24px rgba(124, 58, 237, 0.3);
-  color: #f1f0f7;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-}
-
-
-
-
+/* Catalog switching now uses HomeCatalogSkeleton — no overlay needed */
 

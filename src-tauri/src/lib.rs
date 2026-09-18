@@ -1739,6 +1739,14 @@ async fn get_storage_disk_info(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // When a second instance is launched, focus the existing window instead of
+            // spawning a duplicate process (which caused the "2 terminals" problem).
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .setup(|app| {
             let app_data_dir = app
                 .path()
