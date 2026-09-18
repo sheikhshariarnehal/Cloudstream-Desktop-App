@@ -33,6 +33,7 @@ import {
   MessageSquare,
   AlertCircle,
 } from 'lucide-react';
+import { trackScreen } from '../utils/openpulse';
 
 const TV_TYPES_LIST = [
   'All',
@@ -79,6 +80,11 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
 
   // Discovery Sub-View: 'repos' (all available repos to add) | 'extensions' (all available provider plugins)
   const [discoverTab, setDiscoverTab] = useState<'repos' | 'extensions'>('repos');
+
+  // OpenPulse Telemetry: Track Extension Manager view
+  useEffect(() => {
+    trackScreen('/plugins', { section: navSection, tab: discoverTab });
+  }, [navSection, discoverTab]);
 
   // Currently inspected repository for detailed browsing
   const [selectedRepo, setSelectedRepo] = useState<RepositoryEntry | null>(null);

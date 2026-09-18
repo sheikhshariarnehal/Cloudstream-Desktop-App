@@ -1890,8 +1890,15 @@ pub fn run() {
             delete_downloads_batch,
             get_storage_disk_info,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    state.engine.kill();
+                }
+            }
+        });
 }
 
 #[cfg(windows)]

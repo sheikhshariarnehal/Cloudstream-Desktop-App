@@ -47,6 +47,7 @@ import {
   getAutoSelectSubtitle,
 } from '../utils/subtitleHelper';
 import { useSettings } from '../hooks/useSettings';
+import { trackScreen, trackPlayback } from '../utils/openpulse';
 
 interface PlayerDiagnostics {
   codec?: string;
@@ -189,6 +190,17 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       invoke('player_set_gpu_video_processing', { enabled: settings.gpuVideoProcessing }).catch(console.error);
     }
   }, [settings.hardwareAcceleration, settings.renderProfile, settings.gpuVideoProcessing]);
+
+  // OpenPulse Telemetry: Track Player Screen View
+  useEffect(() => {
+    trackScreen('/player', {
+      title: item.name,
+      provider: item.api_name,
+      season: currentEpisode.season,
+      episode: currentEpisode.name || currentEpisode.episode,
+      tv_type: item.tv_type,
+    });
+  }, [item.name, currentEpisode]);
 
   // Online external subtitles
   const [onlineSubQuery, setOnlineSubQuery] = useState('');
@@ -680,6 +692,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
       });
 
       unlistenError = await listen<PlayerErrorPayload>('player://error', (e) => {
+        trackPlayback('error', {
+          title: item.name,
+          provider: item.api_name,
+          error: e.payload?.reason || 'Playback decoding error',
+        });
         console.error('[PlayerOverlay] Native playback error received:', e.payload);
         setIsVideoReady(false);
         tryNextMirror(e.payload.reason || 'Playback decoding error');
@@ -687,6 +704,11 @@ export const PlayerOverlay: React.FC<PlayerOverlayProps> = ({
 
       // Video Ended / EOF event (CloudStream VideoEndedEvent)
       unlistenEnded = await listen('player://ended', () => {
+        trackPlayback('ended', {
+          title: item.name,
+          provider: item.api_name,
+          durationSec: Math.floor(durationRef.current),
+        });
         setIsPlaying(false);
         setIsVideoReady(false);
         if (hasNextEp) {

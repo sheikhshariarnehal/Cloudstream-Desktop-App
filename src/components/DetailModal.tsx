@@ -29,6 +29,7 @@ import {
   Download,
 } from 'lucide-react';
 import { CloudStreamDeviceIcon, DownloadPieClock, WatchPlayProgress, formatByteSize } from '../screens/DownloadsScreen';
+import { track, trackScreen } from '../utils/openpulse';
 
 interface DetailModalProps {
   item: SearchResponse;
@@ -42,6 +43,7 @@ interface DetailModalProps {
     startTime?: number
   ) => void;
   onSelectItem?: (item: SearchResponse) => void;
+  isPlayerActive?: boolean;
 }
 
 const WATCHLIST_STATUS_CONFIG: Record<
@@ -55,14 +57,25 @@ const WATCHLIST_STATUS_CONFIG: Record<
   dropped: { label: 'Dropped', color: '#f87171', bg: 'rgba(239, 68, 68, 0.18)' },
 };
 
+// Global in-memory cache for media details to avoid refetching on modal reopen or back navigation
+const mediaDetailCache = new Map<string, { data: LoadResponse; timestamp: number }>();
+
 export const DetailModal: React.FC<DetailModalProps> = ({
   item,
   onClose,
   onPlay,
   onSelectItem,
+  isPlayerActive,
 }) => {
-  const [details, setDetails] = useState<LoadResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `${item.api_name}_${item.url}`;
+  const initialCached = mediaDetailCache.get(cacheKey);
+
+  const [details, setDetails] = useState<LoadResponse | null>(() => {
+    return initialCached ? initialCached.data : null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    return !initialCached;
+  });
   const [error, setError] = useState<string | null>(null);
 
   // Watch History & Progress
@@ -72,6 +85,20 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   // Watchlist State
   const [watchlistStatus, setWatchlistStatus] = useState<string | null>(null);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+
+  // OpenPulse Telemetry: Track Details Screen View
+  useEffect(() => {
+    trackScreen('/details', {
+      title: item.name,
+      provider: item.api_name,
+      tv_type: item.tv_type,
+    });
+    track('details_open', {
+      title: item.name,
+      provider: item.api_name,
+      tv_type: item.tv_type,
+    });
+  }, [item.url]);
 
   // Downloads State (CloudStream Offline Parity)
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
@@ -138,9 +165,20 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   }, [effectiveTvType, isMovie]);
 
   // Load Media Details, Watch History, Watchlist, and Downloads
-  const fetchDetails = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchDetails = useCallback(async (forceRefresh = false) => {
+    const key = `${item.api_name}_${item.url}`;
+    const cached = mediaDetailCache.get(key);
+    const isCacheValid = cached && Date.now() - cached.timestamp < 10 * 60 * 1000;
+
+    if (!forceRefresh && cached) {
+      setDetails(cached.data);
+      setLoading(false);
+      setError(null);
+    } else if (!cached) {
+      setLoading(true);
+      setError(null);
+    }
+
     try {
       try {
         const raw = localStorage.getItem('cloudstream_watched_episodes');
@@ -148,10 +186,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       } catch {}
 
       const [res, history, fullHistory, watchlist, dlItems] = await Promise.all([
-        invoke<LoadResponse>('load_media', {
-          provider: item.api_name,
-          url: item.url,
-        }),
+        !forceRefresh && isCacheValid
+          ? Promise.resolve(cached!.data)
+          : invoke<LoadResponse>('load_media', {
+              provider: item.api_name,
+              url: item.url,
+            }).then((data) => {
+              mediaDetailCache.set(key, { data, timestamp: Date.now() });
+              return data;
+            }),
         invoke<WatchHistoryItem[]>('get_media_watch_history', {
           mediaId: item.url,
           title: item.name,
@@ -284,6 +327,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   // Keyboard Escape Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isPlayerActive) return;
       if (e.key === 'Escape') {
         if (activeTrailerUrl) {
           setActiveTrailerUrl(null);
@@ -294,7 +338,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleModalClose, activeTrailerUrl]);
+  }, [handleModalClose, activeTrailerUrl, isPlayerActive]);
+
+  // When returning from player, refresh watch progress immediately
+  useEffect(() => {
+    if (!isPlayerActive) {
+      window.dispatchEvent(new CustomEvent('cloudstream-watch-progress-saved'));
+    }
+  }, [isPlayerActive]);
 
   // Find downloaded item matching an episode
   const getDownloadedItemForEpisode = useCallback(
@@ -536,6 +587,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         is_dash: false,
         headers: {},
       };
+      setActiveTrailerUrl(null);
       onPlay(item, ep, [offlineLink], details?.episodes, details || undefined, startTime);
       return;
     }
@@ -548,6 +600,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         data: ep.data,
       });
       if (links && links.length > 0) {
+        setActiveTrailerUrl(null);
         onPlay(item, ep, links, details?.episodes, details || undefined, startTime);
       } else {
         alert('No playable links found for this source.');
@@ -1026,7 +1079,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           <AlertCircle size={48} color="#ef4444" />
           <h2>Failed to load media</h2>
           <p>{error}</p>
-          <button className="stremio-retry-btn" onClick={fetchDetails}>
+          <button className="stremio-retry-btn" onClick={() => fetchDetails(true)}>
             Retry
           </button>
         </div>

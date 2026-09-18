@@ -3,9 +3,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use crate::models::{ExtractorLink, HomePageList, LoadResponse, SearchResponse};
 
 pub const DEFAULT_ENGINE_PORT: u16 = 45732;
@@ -38,6 +39,8 @@ pub struct EngineClient {
     port: u16,
     last_error: Arc<RwLock<Option<String>>>,
     plugins_dir: Option<PathBuf>,
+    spawn_lock: Arc<Mutex<()>>,
+    has_logged_active: Arc<AtomicBool>,
 }
 
 impl EngineClient {
@@ -52,6 +55,8 @@ impl EngineClient {
             port: p,
             last_error: Arc::new(RwLock::new(None)),
             plugins_dir,
+            spawn_lock: Arc::new(Mutex::new(())),
+            has_logged_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -60,16 +65,27 @@ impl EngineClient {
     }
 
     pub async fn is_healthy(&self) -> bool {
+        self.check_health_with_retries(2, Duration::from_secs(5)).await
+    }
+
+    pub async fn check_health_with_retries(&self, retries: usize, timeout: Duration) -> bool {
         let url = format!("{}/health", self.base_url);
         let check_client = Client::builder()
-            .timeout(Duration::from_secs(2))
+            .timeout(timeout)
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        match check_client.get(&url).send().await {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
+        for attempt in 0..retries {
+            match check_client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => return true,
+                _ => {
+                    if attempt + 1 < retries {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
         }
+        false
     }
 
     /// Finds the self-contained portable JRE bundled with the desktop application.
@@ -248,6 +264,7 @@ impl EngineClient {
     }
 
     pub fn kill(&self) {
+        self.has_logged_active.store(false, Ordering::Relaxed);
         #[cfg(target_os = "windows")]
         Self::kill_engine_on_port(self.port);
     }
@@ -391,29 +408,54 @@ impl EngineClient {
     }
 
     pub async fn ensure_running(&self) -> bool {
+        // Fast path: if engine is already healthy, return immediately without taking the spawn lock
         if self.is_healthy().await {
-            println!("[EngineClient] Headless .cs3 engine already active on {}", self.base_url);
+            if !self.has_logged_active.swap(true, Ordering::Relaxed) {
+                println!("[EngineClient] Headless .cs3 engine active on {}", self.base_url);
+            }
             return true;
         }
 
-        println!("[EngineClient] Engine not running — starting now");
+        // Concurrency guard: avoid stampedes of multiple commands trying to kill or spawn simultaneously
+        let _guard = self.spawn_lock.lock().await;
+
+        // Double-check health under lock (another caller may have completed spawning while we waited)
+        if self.is_healthy().await {
+            if !self.has_logged_active.swap(true, Ordering::Relaxed) {
+                println!("[EngineClient] Headless .cs3 engine active on {}", self.base_url);
+            }
+            return true;
+        }
+
+        println!("[EngineClient] Engine not running or unresponsive — starting now");
+        self.has_logged_active.store(false, Ordering::Relaxed);
 
         #[cfg(target_os = "windows")]
         Self::kill_engine_on_port(self.port);
 
-        self.spawn_and_wait().await
+        let success = self.spawn_and_wait().await;
+        if success {
+            self.has_logged_active.store(true, Ordering::Relaxed);
+        }
+        success
     }
 
     /// Force-restart the engine (e.g. after a JAR rebuild or corrupt state).
     pub async fn force_restart(&self) -> bool {
+        let _guard = self.spawn_lock.lock().await;
         println!("[EngineClient] Force-restarting .cs3 engine...");
+        self.has_logged_active.store(false, Ordering::Relaxed);
 
         #[cfg(target_os = "windows")]
         Self::kill_engine_on_port(self.port);
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        self.spawn_and_wait().await
+        let success = self.spawn_and_wait().await;
+        if success {
+            self.has_logged_active.store(true, Ordering::Relaxed);
+        }
+        success
     }
 
     pub async fn get_providers(&self) -> Result<Vec<EngineProviderInfo>> {

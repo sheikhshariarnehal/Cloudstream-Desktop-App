@@ -30,10 +30,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "resources": [
       "libmpv-2.dll",
-      "libmpv/libmpv-2.dll",
       "engine.jar",
       "android-stubs.jar",
       "jre/**/*"
@@ -51,12 +50,11 @@
     "longDescription": "CloudStream Desktop is a powerful streaming app with support for multiple providers, subtitles, and watch history.",
     "windows": {
       "nsis": {
-        "installMode": "perMachine",
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/hooks.nsh",
         "languages": ["English"],
         "displayLanguageSelector": false
-      },
-      "wix": {
-        "language": "en-US"
       }
     }
   }

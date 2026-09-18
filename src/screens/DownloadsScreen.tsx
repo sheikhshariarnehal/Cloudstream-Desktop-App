@@ -30,6 +30,7 @@ import {
   StorageDiskInfo,
   WatchHistoryItem,
 } from '../types';
+import { trackScreen } from '../utils/openpulse';
 
 /**
  * CloudStream Device Icon with Checkmark
@@ -239,6 +240,11 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'movies' | 'series' | 'anime'>('all');
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
+
+  // OpenPulse Telemetry: Track Downloads Screen View
+  useEffect(() => {
+    trackScreen('/downloads', { filter: typeFilter });
+  }, [typeFilter]);
 
   // UI Modals & Drawers
   const [showQueueDrawer, setShowQueueDrawer] = useState(false);

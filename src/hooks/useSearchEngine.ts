@@ -10,6 +10,7 @@ import {
   SearchDisplayMode,
   TvType,
 } from '../types';
+import { trackSearch } from '../utils/openpulse';
 
 interface CachedSearchResult {
   grouped: ProviderSearchResult[];
@@ -286,6 +287,9 @@ export function useSearchEngine() {
         const finalBundled = res.bundled || [];
         setGroupedResults(finalGrouped);
         setBundledResults(finalBundled);
+
+        // OpenPulse Telemetry: Track search query & results count
+        trackSearch(q, finalBundled.length, selectedProviders.join(',') || 'all');
 
         // Store in LRU cache (limit to 20 entries)
         if (searchCache.current.size >= 20) {

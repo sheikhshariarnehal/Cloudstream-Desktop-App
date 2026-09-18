@@ -39,6 +39,7 @@ const SearchScreen = lazy(() => import('./screens/SearchScreen').then((m) => ({ 
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen })));
 const ExpandedShelfModal = lazy(() => import('./components/ExpandedShelfModal').then((m) => ({ default: m.ExpandedShelfModal })));
 const DownloadsScreen = lazy(() => import('./screens/DownloadsScreen').then((m) => ({ default: m.DownloadsScreen })));
+import { track, trackScreen, trackPlayback, trackProvider } from './utils/openpulse';
 import {
   Search,
   ChevronDown,
@@ -259,6 +260,11 @@ export const App: React.FC = () => {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [discoverFilter, setDiscoverFilter] = useState<'All' | 'Movie' | 'TvSeries' | 'Anime'>('All');
 
+  // OpenPulse Telemetry: Track active screen transitions
+  useEffect(() => {
+    trackScreen('/' + activeTab, { tab: activeTab });
+  }, [activeTab]);
+
   // Close search and sources dropdowns on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -428,6 +434,7 @@ export const App: React.FC = () => {
 
   // Toggle or set watchlist status for an item (CloudStream Bookmark parity)
   const handleSetWatchlistStatus = React.useCallback(async (media: SearchResponse, status?: string) => {
+    track('watchlist_toggle', { title: media.name, status: status || 'removed', provider: media.api_name });
     try {
       const existing = watchlist.find((w) => w.media_id === media.url);
       if (!status || (existing && existing.status === status)) {
@@ -464,6 +471,7 @@ export const App: React.FC = () => {
 
   // Remove single item from Continue Watching (CloudStream removeLastWatched parity)
   const handleRemoveHistoryItem = React.useCallback(async (media: SearchResponse) => {
+    track('history_remove', { title: media.name, provider: media.api_name });
     try {
       await invoke('remove_watch_history_item', { mediaId: media.url });
       await loadLibraryData();
@@ -474,6 +482,7 @@ export const App: React.FC = () => {
 
   // Quick Direct Play (Resume playback or play Ep 1 without modal)
   const handleQuickPlay = React.useCallback(async (media: SearchResponse) => {
+    trackPlayback('play', { title: media.name, provider: media.api_name, tv_type: media.tv_type });
     try {
       const details: any = await invoke('load_media_details', {
         provider: media.api_name,
@@ -550,11 +559,13 @@ export const App: React.FC = () => {
     );
     if (allItems.length === 0) return;
     const picked = allItems[Math.floor(Math.random() * allItems.length)];
+    track('random_item_pick', { title: picked.name, provider: picked.api_name });
     setSelectedItem(picked);
   };
 
   // Clear Watch History (CloudStream deleteResumeWatching parity)
   const handleClearHistory = async () => {
+    track('clear_history');
     try {
       await invoke('clear_watch_history');
       await loadLibraryData();
@@ -566,10 +577,12 @@ export const App: React.FC = () => {
 
   // Refresh active provider (CloudStream home_preview_reload_provider parity)
   const handleRefresh = async () => {
+    track('home_refresh', { provider: selectedExtension });
     setIsRefreshing(true);
     await Promise.all([loadHome(), loadLibraryData()]);
     setTimeout(() => setIsRefreshing(false), 400);
   };
+
 
   // Close dropdowns on click outside
   useEffect(() => {
@@ -648,6 +661,7 @@ export const App: React.FC = () => {
   };
 
   const handleSelectExtension = (extName: string) => {
+    trackProvider('selected', extName);
     setSelectedExtension(extName);
     try {
       localStorage.setItem('cloudstream_selected_extension', extName);
@@ -1026,28 +1040,12 @@ export const App: React.FC = () => {
       return a.name.localeCompare(b.name);
     });
 
-  if (playerState) {
-    return (
-      <Suspense fallback={null}>
-        <PlayerOverlay
-          item={playerState.item}
-          episode={playerState.episode}
-          links={playerState.links}
-          allEpisodes={playerState.allEpisodes}
-          mediaDetails={playerState.mediaDetails}
-          startTime={playerState.startTime}
-          onClose={() => {
-            invoke('player_stop').catch(() => {});
-            setPlayerState(null);
-            loadLibraryData();
-          }}
-        />
-      </Suspense>
-    );
-  }
-
   return (
-    <div className="app-container">
+    <>
+      <div
+        className="app-container"
+        style={{ display: playerState ? 'none' : 'flex' }}
+      >
       {/* Left Navigation Rail (Stremio Exact) */}
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} activeDownloadsCount={activeDownloadsCount} />
 
@@ -1571,7 +1569,10 @@ export const App: React.FC = () => {
                           <button
                             key={cat.id}
                             className={`stremio-category-pill ${isActive ? 'active' : ''}`}
-                            onClick={() => setBoardCategory(cat.id)}
+                            onClick={() => {
+                              setBoardCategory(cat.id);
+                              track('category_filter', { category: cat.id });
+                            }}
                           >
                             <IconComponent size={13} />
                             <span>{cat.label}</span>
@@ -1876,6 +1877,7 @@ export const App: React.FC = () => {
         <Suspense fallback={null}>
           <DetailModal
             item={selectedItem}
+            isPlayerActive={Boolean(playerState)}
             onClose={() => {
               if (itemHistoryStack.length > 0) {
                 const prevItem = itemHistoryStack[itemHistoryStack.length - 1];
@@ -1955,6 +1957,25 @@ export const App: React.FC = () => {
         );
       })()}
     </div>
+
+    {playerState && (
+      <Suspense fallback={null}>
+        <PlayerOverlay
+          item={playerState.item}
+          episode={playerState.episode}
+          links={playerState.links}
+          allEpisodes={playerState.allEpisodes}
+          mediaDetails={playerState.mediaDetails}
+          startTime={playerState.startTime}
+          onClose={() => {
+            invoke('player_stop').catch(() => {});
+            setPlayerState(null);
+            loadLibraryData();
+          }}
+        />
+      </Suspense>
+    )}
+  </>
   );
 };
 

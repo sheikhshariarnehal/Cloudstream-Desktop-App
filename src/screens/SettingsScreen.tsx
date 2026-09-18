@@ -9,6 +9,7 @@ import { AccountsTab } from './settings/tabs/AccountsTab';
 import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
 import { UpdatesBackupTab } from './settings/tabs/UpdatesBackupTab';
 import { DiagnosticsTab } from './settings/tabs/DiagnosticsTab';
+import { trackScreen } from '../utils/openpulse';
 
 interface NavItem {
   id: string;
@@ -33,6 +34,11 @@ export const SettingsScreen: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
   const isClickScrolling = useRef(false);
+
+  // OpenPulse Telemetry: Track Settings Screen & Section Views
+  useEffect(() => {
+    trackScreen('/settings', { section: activeSection });
+  }, [activeSection]);
 
   const appVersion = '6.0.1-beta.09';
   const buildVersion = '6ed4463d94ba...';
