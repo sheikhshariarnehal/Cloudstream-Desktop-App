@@ -27,6 +27,7 @@ import { HeroBanner } from './components/HeroBanner';
 import { HomeShelfRow, HomeShelfSeeAllEntry } from './components/HomeShelfRow';
 import { LazyMount } from './components/LazyMount';
 import { ProviderIcon } from './components/ProviderIcon';
+import { HomeCatalogSkeleton } from './components/HomeCatalogSkeleton';
 
 // Code-split heavy, conditionally-rendered screens/modals so the initial
 // mainpage bundle only pays for what it actually renders on first paint.
@@ -188,7 +189,19 @@ export const App: React.FC = () => {
   const [sourceFilterDropdownOpen, setSourceFilterDropdownOpen] = useState(false);
 
   // Extensions / Providers state
-  const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+  const [extensions, setExtensions] = useState<ExtensionInfo[]>(() => {
+    try {
+      const saved = localStorage.getItem('cloudstream_cached_extensions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return [];
+  });
+  const [isExtensionsLoading, setIsExtensionsLoading] = useState(true);
   const [selectedExtension, setSelectedExtension] = useState<string>(() => {
     return localStorage.getItem('cloudstream_selected_extension') || '';
   });
@@ -199,6 +212,7 @@ export const App: React.FC = () => {
   const {
     shelves,
     loadingShelves,
+    isSwitchingProvider,
     isRefreshing,
     setIsRefreshing,
     heroDetails,
@@ -390,7 +404,12 @@ export const App: React.FC = () => {
     try {
       const exts: ExtensionInfo[] = await invoke('get_available_extensions');
       const realExts = exts.filter((e) => e.id !== 'all' && e.id !== 'random' && e.id !== 'none');
-      setExtensions(realExts);
+      if (realExts.length > 0) {
+        setExtensions(realExts);
+        try {
+          localStorage.setItem('cloudstream_cached_extensions', JSON.stringify(realExts));
+        } catch {}
+      }
 
       // Validate selectedExtension
       const saved = localStorage.getItem('cloudstream_selected_extension') || '';
@@ -405,14 +424,11 @@ export const App: React.FC = () => {
           localStorage.setItem('cloudstream_selected_extension', defaultExt);
         } catch {}
         loadHome(defaultExt);
-      } else if (realExts.length === 0) {
-        setSelectedExtension('');
-        try {
-          localStorage.removeItem('cloudstream_selected_extension');
-        } catch {}
       }
     } catch (e) {
       console.error('Failed to load extensions:', e);
+    } finally {
+      setIsExtensionsLoading(false);
     }
   };
 
@@ -1050,6 +1066,11 @@ export const App: React.FC = () => {
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} activeDownloadsCount={activeDownloadsCount} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+        {/* Top Slim Glow Progress Bar on any catalog loading or extension switching */}
+        {(loadingShelves || isRefreshing || isSwitchingProvider) && (
+          <div className="top-loading-bar" />
+        )}
+
         {/* Top Header Bar (Stremio Exact) */}
         <header className="stremio-header">
           <div className="stremio-header-left">
@@ -1231,11 +1252,13 @@ export const App: React.FC = () => {
             {/* CloudStream Extension Selector Pill (moved to rightmost position) */}
             <div className="extension-selector-container" ref={dropdownRef}>
               <div
-                className="stremio-ext-badge"
+                className={`stremio-ext-badge ${isSwitchingProvider || (loadingShelves && shelves.length === 0) ? 'stremio-ext-badge-loading' : ''}`}
                 onClick={() => setShowExtensionDropdown(!showExtensionDropdown)}
                 title="Select or switch active CloudStream extension"
               >
-                {extensions.length === 0 ? (
+                {isSwitchingProvider || (loadingShelves && shelves.length === 0) ? (
+                  <Loader2 size={15} className="animate-spin" color="var(--stremio-purple-light)" />
+                ) : extensions.length === 0 ? (
                   <Puzzle size={14} color="var(--stremio-purple-light)" />
                 ) : (
                   <ProviderIcon
@@ -1245,7 +1268,11 @@ export const App: React.FC = () => {
                   />
                 )}
                 <span className="stremio-ext-badge-text">
-                  {extensions.length === 0
+                  {isSwitchingProvider
+                    ? `Switching to ${selectedExtension}...`
+                    : extensions.length === 0 && isExtensionsLoading
+                    ? selectedExtension || 'Loading...'
+                    : extensions.length === 0
                     ? 'No Extensions'
                     : currentExtObj?.name || selectedExtension}
                 </span>
@@ -1409,8 +1436,46 @@ export const App: React.FC = () => {
             <div>
 
 
-              {/* Onboarding State if 0 Extensions Installed */}
-              {extensions.length === 0 ? (
+              {/* Cold Start Initialization State: Shown briefly ONLY if 0 extensions are in memory/cache and loading is in progress */}
+              {isExtensionsLoading && extensions.length === 0 && shelves.length === 0 ? (
+                <div
+                  style={{
+                    padding: '80px 40px',
+                    textAlign: 'center',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '16px',
+                    margin: '60px auto',
+                    maxWidth: '560px',
+                    background: 'var(--stremio-surface)',
+                    borderRadius: '20px',
+                    border: '1px solid var(--border-subtle)',
+                    boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '64px',
+                      height: '64px',
+                      borderRadius: '18px',
+                      background: 'rgba(124, 58, 237, 0.15)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Loader2 size={32} className="animate-spin" color="var(--stremio-purple-light)" />
+                  </div>
+                  <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', margin: 0 }}>
+                    Initializing Extensions
+                  </h2>
+                  <p style={{ color: '#94a3b8', fontSize: '14px', lineHeight: '1.6', margin: 0 }}>
+                    Starting CloudStream extension engine and loading your catalog...
+                  </p>
+                </div>
+              ) : extensions.length === 0 && !isExtensionsLoading ? (
                 <div
                   style={{
                     padding: '80px 40px',
@@ -1458,13 +1523,8 @@ export const App: React.FC = () => {
                     Open Extension Manager
                   </button>
                 </div>
-              ) : loadingShelves ? (
-                <div style={{ padding: '80px', textAlign: 'center', color: '#94a3b8' }}>
-                  <div style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
-                    <RefreshCw size={18} className="animate-spin" />
-                    Loading catalog from {selectedExtension || 'extension'}...
-                  </div>
-                </div>
+              ) : loadingShelves && shelves.length === 0 ? (
+                <HomeCatalogSkeleton />
               ) : shelves.length === 0 && continueWatchingItems.length === 0 && watchlist.length === 0 ? (
                 engineStatus && !engineStatus.is_healthy ? (
                   <div className="home-error-card" style={{ borderColor: 'rgba(239, 68, 68, 0.3)', background: 'linear-gradient(180deg, rgba(239, 68, 68, 0.08) 0%, rgba(15, 17, 26, 0.95) 100%)' }}>
@@ -1545,19 +1605,36 @@ export const App: React.FC = () => {
                 )
               ) : (
                 /* Stremio Media Shelves Board with CloudStream Shelves */
-                <div>
-                  {/* Stremio Hero Spotlight Carousel with CloudStream Preview Parity */}
-                  {heroBannerItems.length > 0 && (
-                    <HeroBanner
-                      items={heroBannerItems}
-                      loadedDetails={heroDetails}
-                      onSelectItem={setSelectedItem}
-                      onPlayItem={handleQuickPlay}
-                      onToggleWatchlist={handleSetWatchlistStatus}
-                      isInWatchlist={isInWatchlist}
-                      currentWatchStatus={getWatchlistStatus}
-                    />
+                <div style={{ position: 'relative' }}>
+                  {isSwitchingProvider && (
+                    <div className="catalog-switching-overlay">
+                      <div className="catalog-switching-pill">
+                        <Loader2 size={18} className="animate-spin" color="var(--stremio-purple-light)" />
+                        <span>Loading {selectedExtension} catalog...</span>
+                      </div>
+                    </div>
                   )}
+
+                  <div
+                    style={{
+                      opacity: isSwitchingProvider ? 0.35 : 1,
+                      filter: isSwitchingProvider ? 'blur(3px)' : 'none',
+                      transition: 'opacity 0.25s ease, filter 0.25s ease',
+                      pointerEvents: isSwitchingProvider ? 'none' : 'auto',
+                    }}
+                  >
+                    {/* Stremio Hero Spotlight Carousel with CloudStream Preview Parity */}
+                    {heroBannerItems.length > 0 && (
+                      <HeroBanner
+                        items={heroBannerItems}
+                        loadedDetails={heroDetails}
+                        onSelectItem={setSelectedItem}
+                        onPlayItem={handleQuickPlay}
+                        onToggleWatchlist={handleSetWatchlistStatus}
+                        isInWatchlist={isInWatchlist}
+                        currentWatchStatus={getWatchlistStatus}
+                      />
+                    )}
 
                   {/* CloudStream Home Page Category Chips (tvtypes_chips & TvType parity) */}
                   {visibleCategories.length > 1 && (
@@ -1700,6 +1777,7 @@ export const App: React.FC = () => {
                         />
                       </LazyMount>
                     ))}
+                  </div>
                   </div>
                 </div>
               )}

@@ -203,7 +203,15 @@ async fn get_available_extensions(state: State<'_, AppState>) -> Result<Vec<Exte
 
     let repo_plugins = state.db.get_all_repository_plugins().unwrap_or_default();
 
-    let engine_providers = state.engine.get_providers().await.unwrap_or_default();
+    // Query engine providers with a fast timeout so we never block startup if the engine is still initializing
+    let engine_providers = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        state.engine.get_providers(),
+    )
+    .await
+    .ok()
+    .and_then(|res| res.ok())
+    .unwrap_or_default();
     let mut matched_manifest_ids = std::collections::HashSet::new();
 
     if !engine_providers.is_empty() {

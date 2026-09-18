@@ -3,9 +3,25 @@ import { invoke } from '@tauri-apps/api/core';
 import { ExpandableShelf, SearchResponse, LoadResponse, HomePageList } from '../types';
 
 export function useHomeViewModel(selectedExtension: string) {
-  const [shelves, setShelves] = useState<ExpandableShelf[]>([]);
-  const [loadingShelves, setLoadingShelves] = useState(true);
+  // Stale-While-Revalidate: initialize from cached shelves if available for instant 0ms home paint
+  const [shelves, setShelves] = useState<ExpandableShelf[]>(() => {
+    const ext = selectedExtension || localStorage.getItem('cloudstream_selected_extension') || '';
+    if (!ext || ext === 'none' || ext === 'None') return [];
+    try {
+      const cached = localStorage.getItem(`cloudstream_cached_home_${ext.toLowerCase().trim()}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return [];
+  });
+  const [loadingShelves, setLoadingShelves] = useState<boolean>(() => shelves.length === 0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSwitchingProvider, setIsSwitchingProvider] = useState(false);
+  const [switchingProviderName, setSwitchingProviderName] = useState<string | null>(null);
   const [heroDetails, setHeroDetails] = useState<Record<string, LoadResponse>>({});
   const [expandedShelf, setExpandedShelf] = useState<ExpandableShelf | null>(null);
   const [expandingShelfName, setExpandingShelfName] = useState<string | null>(null);
@@ -59,14 +75,39 @@ export function useHomeViewModel(selectedExtension: string) {
   const loadHome = useCallback(
     async (extName?: string) => {
       const requestId = ++currentRequestId.current;
-      setLoadingShelves(true);
-
       const target = extName !== undefined ? extName : selectedExtension;
 
       if (!target || target === 'none' || target === 'None' || target === 'None (Offline Mode)') {
         setShelves([]);
         setLoadingShelves(false);
+        setIsSwitchingProvider(false);
+        setSwitchingProviderName(null);
         return;
+      }
+
+      const isDifferent = extName !== undefined && extName !== selectedExtension;
+      if (isDifferent) {
+        setIsSwitchingProvider(true);
+        setSwitchingProviderName(target);
+      }
+      setLoadingShelves(true);
+
+      // Check cache for instant switch if current shelves don't match target
+      let foundCache = false;
+      try {
+        const cached = localStorage.getItem(`cloudstream_cached_home_${target.toLowerCase().trim()}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setShelves(parsed);
+            foundCache = true;
+          }
+        }
+      } catch {}
+
+      // If switching to an uncached provider, clear previous shelves so skeleton appears immediately
+      if (isDifferent && !foundCache) {
+        setShelves([]);
       }
 
       const providerArg =
@@ -97,7 +138,18 @@ export function useHomeViewModel(selectedExtension: string) {
 
         if (requestId !== currentRequestId.current) return;
 
-        setShelves(loadedShelves);
+        if (loadedShelves.length > 0) {
+          setShelves(loadedShelves);
+          try {
+            localStorage.setItem(
+              `cloudstream_cached_home_${target.toLowerCase().trim()}`,
+              JSON.stringify(loadedShelves.slice(0, 10))
+            );
+          } catch {}
+        } else {
+          // Only clear shelves if we had no cached shelves
+          setShelves((prev) => (prev.length > 0 ? prev : []));
+        }
 
         // Extract hero items to prefetch real LoadResponse data
         const heroItems: SearchResponse[] = [];
@@ -117,11 +169,14 @@ export function useHomeViewModel(selectedExtension: string) {
       } catch (err) {
         console.error('[useHomeViewModel] Failed to load home shelves:', err);
         if (requestId === currentRequestId.current) {
-          setShelves([]);
+          // Keep existing cached shelves on temporary connection error rather than wiping the screen!
+          setShelves((prev) => (prev.length > 0 ? prev : []));
         }
       } finally {
         if (requestId === currentRequestId.current) {
           setLoadingShelves(false);
+          setIsSwitchingProvider(false);
+          setSwitchingProviderName(null);
         }
       }
     },
@@ -184,6 +239,8 @@ export function useHomeViewModel(selectedExtension: string) {
     shelves,
     setShelves,
     loadingShelves,
+    isSwitchingProvider,
+    switchingProviderName,
     isRefreshing,
     setIsRefreshing,
     heroDetails,

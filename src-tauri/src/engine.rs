@@ -65,7 +65,7 @@ impl EngineClient {
     }
 
     pub async fn is_healthy(&self) -> bool {
-        self.check_health_with_retries(2, Duration::from_secs(5)).await
+        self.check_health_with_retries(3, Duration::from_secs(15)).await
     }
 
     pub async fn check_health_with_retries(&self, retries: usize, timeout: Duration) -> bool {
@@ -341,6 +341,13 @@ impl EngineClient {
             // DEX-to-JVM translated classes (from .cs3 plugins) have mismatched
             // StackMapTable entries that fail Java 13+ verification but run fine at runtime.
             "-Xverify:none",
+            // Tier 1 C1 compilation starts up up to 3x-4x faster than default C2 tiered server compiler
+            "-XX:TieredStopAtLevel=1",
+            // Headless runtime flag to skip AWT/GUI subsystem init
+            "-Djava.awt.headless=true",
+            // Initial memory allocation for quick startup
+            "-Xms32m",
+            "-Xmx512m",
             "-cp", &cp,
             main_class,
             "--server",
@@ -366,17 +373,17 @@ impl EngineClient {
             return false;
         }
 
-        // Phase 1: Poll up to 25 s for /health to pass
+        // Phase 1: Poll up to 25 s for /health to pass (fast 250ms intervals)
         let mut healthy = false;
-        for i in 1..=25 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        for i in 1..=100 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
             if self.is_healthy().await {
-                println!("[EngineClient] Engine /health passed after {}s", i);
+                println!("[EngineClient] Engine /health passed after {}ms", i * 250);
                 healthy = true;
                 break;
             }
-            if i % 5 == 0 {
-                println!("[EngineClient] Waiting for engine health... ({}/25s)", i);
+            if i % 20 == 0 {
+                println!("[EngineClient] Waiting for engine health... ({}s/25s)", (i * 250) / 1000);
             }
         }
 
@@ -389,17 +396,17 @@ impl EngineClient {
 
         *self.last_error.write().await = None;
 
-        // Phase 2: Wait up to 30 s for /providers to return results (plugins loaded)
-        for i in 1..=30 {
+        // Phase 2: Wait up to 30 s for /providers to return results (checking every 500ms)
+        for i in 1..=60 {
             if let Ok(providers) = self.get_providers().await {
                 if !providers.is_empty() {
-                    println!("[EngineClient] Engine fully ready: {} providers loaded after {}s", providers.len(), i);
+                    println!("[EngineClient] Engine fully ready: {} providers loaded after {}ms", providers.len(), i * 500);
                     return true;
                 }
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            if i % 5 == 0 {
-                println!("[EngineClient] Waiting for plugins to load... ({}/30s)", i);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if i % 10 == 0 {
+                println!("[EngineClient] Waiting for plugins to load... ({}s/30s)", (i * 500) / 1000);
             }
         }
 
@@ -480,7 +487,10 @@ impl EngineClient {
             return Err(anyhow!("Failed to fetch main page from engine: {}", err_text));
         }
 
-        let shelves: Vec<HomePageList> = resp.json().await?;
+        let raw_text = resp.text().await?;
+        let shelves: Vec<HomePageList> = serde_json::from_str(&raw_text).map_err(|e| {
+            anyhow!("Failed to parse main page JSON: {}. Raw response: {}", e, raw_text)
+        })?;
         Ok(shelves)
     }
 
@@ -499,7 +509,10 @@ impl EngineClient {
             return Err(anyhow!("Engine search error: {}", err_text));
         }
 
-        let results: Vec<SearchResponse> = resp.json().await?;
+        let raw_text = resp.text().await?;
+        let results: Vec<SearchResponse> = serde_json::from_str(&raw_text).map_err(|e| {
+            anyhow!("Failed to parse search JSON: {}. Raw response: {}", e, raw_text)
+        })?;
         Ok(results)
     }
 
@@ -516,7 +529,10 @@ impl EngineClient {
             return Err(anyhow!("Engine load error: {}", err_text));
         }
 
-        let details: LoadResponse = resp.json().await?;
+        let raw_text = resp.text().await?;
+        let details: LoadResponse = serde_json::from_str(&raw_text).map_err(|e| {
+            anyhow!("Failed to parse load JSON: {}. Raw response: {}", e, raw_text)
+        })?;
         Ok(details)
     }
 
@@ -533,7 +549,10 @@ impl EngineClient {
             return Err(anyhow!("Engine load_links error: {}", err_text));
         }
 
-        let links: Vec<ExtractorLink> = resp.json().await?;
+        let raw_text = resp.text().await?;
+        let links: Vec<ExtractorLink> = serde_json::from_str(&raw_text).map_err(|e| {
+            anyhow!("Failed to parse load_links JSON: {}. Raw response: {}", e, raw_text)
+        })?;
         Ok(links)
     }
 
