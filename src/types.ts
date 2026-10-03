@@ -175,6 +175,7 @@ export interface RepositoryEntry {
   manifest_version?: number;
   plugin_count: number;
   added_at: number;
+  is_default?: boolean;
 }
 
 export interface PluginManifest {

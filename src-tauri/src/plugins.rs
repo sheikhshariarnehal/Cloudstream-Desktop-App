@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use zip::ZipArchive;
 
+#[derive(Clone)]
 pub struct PluginManager {
     client: Client,
     plugins_dir: PathBuf,

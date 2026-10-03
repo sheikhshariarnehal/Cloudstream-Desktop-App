@@ -121,6 +121,32 @@ impl EngineClient {
     pub fn find_system_java17() -> Option<PathBuf> {
         let mut candidates = Vec::new();
 
+        // 1. Prioritize Java 17 & 21 LTS: these versions are 100% compatible with
+        // the Android R8 bytecode translator (which fails on class file version 66 of Java 22+).
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-17\bin\java.exe"));
+        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-21\bin\java.exe"));
+
+        for base in [
+            r"C:\Program Files\Eclipse Adoptium",
+            r"C:\Program Files\Microsoft",
+            r"C:\Program Files\BellSoft",
+            r"C:\Program Files\Amazon Corretto",
+            r"C:\Program Files\Java",
+        ] {
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let path_str = entry.path().to_string_lossy().to_lowercase();
+                    if path_str.contains("17") || path_str.contains("21") {
+                        let java_exe = entry.path().join("bin").join("java.exe");
+                        if java_exe.exists() {
+                            candidates.push(java_exe);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check JAVA_HOME and JDK_HOME
         if let Ok(java_home) = std::env::var("JAVA_HOME") {
             candidates.push(PathBuf::from(java_home).join("bin").join("java.exe"));
         }
@@ -128,8 +154,6 @@ impl EngineClient {
             candidates.push(PathBuf::from(jdk_home).join("bin").join("java.exe"));
         }
 
-        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-17\bin\java.exe"));
-        candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-21\bin\java.exe"));
         candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-22\bin\java.exe"));
         candidates.push(PathBuf::from(r"C:\Program Files\Java\jdk-23\bin\java.exe"));
 
@@ -351,21 +375,28 @@ impl EngineClient {
         let mut cmd = Command::new(&java_bin);
         cmd.current_dir(&jar_dir);
         cmd.args([
+            // Fully bypass JVM bytecode verification for dynamic DEX-to-JVM translated .cs3 classes.
+            // Android DEX bytecode reuses local variable registers across scopes and contains
+            // non-standard try-catch frames that fail standard Java StackMapTable checking with VerifyError.
+            "-Xverify:none",
+            "-noverify",
             // Relax bytecode verification for DEX-to-JVM translated .cs3 plugin classes.
             // BytecodeVerificationLocal is a diagnostic flag — must unlock first.
             "-XX:+UnlockDiagnosticVMOptions",
             "-XX:-BytecodeVerificationLocal",
-            // Tier 1 C1 compilation starts up 3x-4x faster than default C2 tiered server compiler
-            "-XX:TieredStopAtLevel=1",
-            // Serial GC uses 30-50% less baseline memory than G1GC for small server apps
-            "-XX:+UseSerialGC",
+            // Disable interpreter bytecode rewriting to prevent fatal JVM crash
+            // (generateOopMap.cpp: fatal error: Rewriting method not allowed at this stage)
+            // during GC safepoints inside DEX-translated Kotlin suspend state machines (e.g. AnimeDekho).
+            "-XX:-RewriteBytecodes",
+            "-XX:-RewriteFrequentPairs",
+            // Use G1GC with adequate memory so safepoint GC pauses don't thrash the interpreter
+            "-XX:+UseG1GC",
+            "-Xms128m",
+            "-Xmx512m",
             // Compressed object pointers — saves ~20% heap on 64-bit JVMs
             "-XX:+UseCompressedOops",
             // Headless runtime flag to skip AWT/GUI subsystem init
             "-Djava.awt.headless=true",
-            // Lean memory allocation: 16MB initial, 256MB cap (engine is a small HTTP server)
-            "-Xms16m",
-            "-Xmx256m",
             "-cp", &cp,
             main_class,
             "--server",
@@ -417,8 +448,10 @@ impl EngineClient {
         // Phase 2: Wait up to 30 s for /providers to return results (checking every 500ms)
         for i in 1..=60 {
             if let Ok(providers) = self.get_providers().await {
-                if !providers.is_empty() {
-                    println!("[EngineClient] Engine fully ready: {} providers loaded after {}ms", providers.len(), i * 500);
+                // Wait until real (non-placeholder) DEX-translated providers are loaded
+                let real_count = providers.iter().filter(|p| !p.main_url.contains("cloudstream.app")).count();
+                if real_count > 0 {
+                    println!("[EngineClient] Engine fully ready: {} providers loaded ({} real) after {}ms", providers.len(), real_count, i * 500);
                     return true;
                 }
             }

@@ -256,6 +256,7 @@ pub struct RepositoryEntry {
     pub manifest_version: Option<i32>,
     pub plugin_count: usize,
     pub added_at: i64,
+    pub is_default: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

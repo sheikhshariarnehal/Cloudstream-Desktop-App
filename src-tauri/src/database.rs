@@ -360,17 +360,23 @@ impl Database {
     pub fn get_repositories(&self) -> Result<Vec<RepositoryEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT url, name, icon_url, plugin_count, added_at FROM repositories ORDER BY added_at DESC",
+            "SELECT url, name, icon_url, plugin_count, added_at FROM repositories 
+             ORDER BY CASE WHEN url LIKE '%nehal-CloudStream%' THEN 0 ELSE 1 END, added_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             let count: i64 = row.get(3).unwrap_or(0);
+            let url: String = row.get(0)?;
+            let is_default = url.trim().eq_ignore_ascii_case("https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json")
+                || url.contains("nehalDIU/nehal-CloudStream")
+                || url.contains("nehal-CloudStream");
             Ok(RepositoryEntry {
-                url: row.get(0)?,
+                url,
                 name: row.get(1)?,
                 icon_url: row.get(2)?,
                 manifest_version: Some(1),
                 plugin_count: count as usize,
                 added_at: row.get(4)?,
+                is_default: Some(is_default),
             })
         })?;
 

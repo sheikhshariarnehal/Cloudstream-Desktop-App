@@ -418,7 +418,7 @@ export const App: React.FC = () => {
       );
 
       if (realExts.length > 0 && (!saved || !exists || saved === 'all' || saved === 'random' || saved === 'none')) {
-        const defaultExt = realExts[0].name;
+        const defaultExt = realExts.find((e) => e.name.toLowerCase() === 'cineplexbd')?.name || realExts[0].name;
         setSelectedExtension(defaultExt);
         try {
           localStorage.setItem('cloudstream_selected_extension', defaultExt);
@@ -500,7 +500,7 @@ export const App: React.FC = () => {
   const handleQuickPlay = React.useCallback(async (media: SearchResponse) => {
     trackPlayback('play', { title: media.name, provider: media.api_name, tv_type: media.tv_type });
     try {
-      const details: any = await invoke('load_media_details', {
+      const details: any = await invoke('load_media', {
         provider: media.api_name,
         url: media.url,
       });
@@ -648,6 +648,11 @@ export const App: React.FC = () => {
       // loadHome will be called by loadExtensions -> setSelectedExtension chain
     });
 
+    const unlistenUpdated = listen('extensions-updated', () => {
+      console.log('[App] extensions-updated received — reloading extensions');
+      loadExtensions();
+    });
+
     const unlistenError = listen<EngineStatus>('engine-error', (event) => {
       console.warn('[App] engine-error received:', event.payload);
       setEngineStatus(event.payload);
@@ -659,6 +664,7 @@ export const App: React.FC = () => {
 
     return () => {
       unlistenReady.then((fn) => fn());
+      unlistenUpdated.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenStatus.then((fn) => fn());
     };

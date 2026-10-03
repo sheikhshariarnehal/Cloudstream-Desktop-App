@@ -11,13 +11,29 @@ export interface CloudStreamRepoDef {
   webpage?: string;
   community?: string;
   description: string;
+  isDefault?: boolean;
   plugins?: { name: string; featured?: boolean; disabled?: boolean }[];
 }
+
+export const DEFAULT_REPO_URL = 'https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json';
+export const DEFAULT_REPO_NAME = "Nehal's Server (BDIX & CloudStream)";
+export const DEFAULT_REPO_ID = 'nehal';
+
+export const isDefaultRepository = (url?: string | null): boolean => {
+  if (!url) return false;
+  const clean = url.trim().toLowerCase();
+  return (
+    clean === DEFAULT_REPO_URL.toLowerCase() ||
+    clean.includes('nehaldcloudstream') ||
+    clean.includes('nehal-cloudstream')
+  );
+};
 
 export const ALL_CLOUDSTREAM_REPOSITORIES: CloudStreamRepoDef[] = [
   {
     "id": "nehal",
     "name": "Nehal's Server (BDIX & CloudStream)",
+    "isDefault": true,
     "icon": "🐧",
     "iconUrl": "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/icon.png",
     "iconBg": "rgba(99,102,241,0.2)",

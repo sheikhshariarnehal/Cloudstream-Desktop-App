@@ -977,9 +977,29 @@ async fn clear_search_history(state: State<'_, AppState>) -> Result<(), String> 
 async fn load_media(provider: String, url: String, state: State<'_, AppState>) -> Result<LoadResponse, String> {
     state.engine.ensure_running().await;
     let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
+
+    let trimmed_url = url.trim();
+    if trimmed_url.is_empty() {
+        return Err("Media URL is empty".to_string());
+    }
+
+    // Providers like AnimeDekho require Media JSON in the url field for detail loading
+    let final_url = if (resolved.eq_ignore_ascii_case("Anime Dekho") || resolved.eq_ignore_ascii_case("AnimeDekhoProvider"))
+        && !trimmed_url.starts_with('{')
+        && trimmed_url.starts_with("http")
+    {
+        serde_json::json!({
+            "url": trimmed_url,
+            "poster": "",
+            "mediaType": serde_json::Value::Null
+        }).to_string()
+    } else {
+        trimmed_url.to_string()
+    };
+
     state
         .providers
-        .load(&resolved, &url)
+        .load(&resolved, &final_url)
         .await
         .map_err(|e| format!("Failed to load media: {}", e))
 }
@@ -988,9 +1008,15 @@ async fn load_media(provider: String, url: String, state: State<'_, AppState>) -
 async fn load_links(provider: String, data: String, state: State<'_, AppState>) -> Result<Vec<ExtractorLink>, String> {
     state.engine.ensure_running().await;
     let resolved = resolve_provider_name(&state, Some(provider.clone())).await.unwrap_or(provider);
+
+    let trimmed_data = data.trim();
+    if trimmed_data.is_empty() {
+        return Err("Media stream data is empty".to_string());
+    }
+
     let raw_links = state
         .providers
-        .load_links(&resolved, &data)
+        .load_links(&resolved, trimmed_data)
         .await
         .map_err(|e| format!("Failed to extract links: {}", e))?;
 
@@ -1057,6 +1083,151 @@ async fn remove_watchlist_item(media_id: String, state: State<'_, AppState>) -> 
     state.db.remove_from_watchlist(&media_id).map_err(|e| e.to_string())
 }
 
+pub const DEFAULT_REPO_URL: &str = "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/repo.json";
+pub const DEFAULT_REPO_NAME: &str = "Nehal's Server (BDIX & CloudStream)";
+pub const DEFAULT_REPO_ICON: &str = "https://raw.githubusercontent.com/nehalDIU/nehal-CloudStream/master/icon.png";
+
+pub async fn ensure_default_repository_and_plugins(
+    db: &Database,
+    plugin_manager: &PluginManager,
+    engine: &EngineClient,
+    app_handle: &AppHandle,
+) -> Result<RepositoryEntry, String> {
+    println!("[DefaultRepo] Checking default repository '{}'...", DEFAULT_REPO_NAME);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    // 1. Fetch latest or cached repository manifest
+    let manifest_res = plugin_manager.fetch_repository(DEFAULT_REPO_URL).await;
+    let (manifest, manifest_json) = match manifest_res {
+        Ok(m) => {
+            let json_str = serde_json::to_string(&m).unwrap_or_default();
+            (Some(m), Some(json_str))
+        }
+        Err(e) => {
+            eprintln!("[DefaultRepo] Could not fetch remote manifest ({}). Checking cached...", e);
+            let cached_json = db.get_repository_manifest_json(DEFAULT_REPO_URL).ok().flatten();
+            let parsed = cached_json.as_deref().and_then(|j| serde_json::from_str::<RepositoryManifest>(j).ok());
+            (parsed, cached_json)
+        }
+    };
+
+    let entry = if let (Some(m), Some(ref j)) = (&manifest, &manifest_json) {
+        let entry = RepositoryEntry {
+            name: DEFAULT_REPO_NAME.to_string(),
+            url: DEFAULT_REPO_URL.to_string(),
+            icon_url: Some(DEFAULT_REPO_ICON.to_string()),
+            manifest_version: m.manifest_version,
+            plugin_count: m.plugins.len(),
+            added_at: now,
+            is_default: Some(true),
+        };
+        let _ = db.save_repository(&entry, j);
+        entry
+    } else {
+        let entry = RepositoryEntry {
+            name: DEFAULT_REPO_NAME.to_string(),
+            url: DEFAULT_REPO_URL.to_string(),
+            icon_url: Some(DEFAULT_REPO_ICON.to_string()),
+            manifest_version: Some(1),
+            plugin_count: 21,
+            added_at: now,
+            is_default: Some(true),
+        };
+        let fallback_manifest = serde_json::json!({
+            "name": DEFAULT_REPO_NAME,
+            "url": DEFAULT_REPO_URL,
+            "plugins": []
+        });
+        let _ = db.save_repository(&entry, &fallback_manifest.to_string());
+        entry
+    };
+
+    // 2. Automatically install missing extensions from default repository in parallel
+    if let Some(m) = manifest {
+        let installed = plugin_manager.list_installed_plugins().unwrap_or_default();
+        let plugins_dir = plugin_manager.plugins_dir();
+
+        let missing: Vec<_> = m
+            .plugins
+            .into_iter()
+            .filter(|p| {
+                let cs3_name = format!("{}.cs3", p.name.replace(' ', "_"));
+                let jar_name = format!("{}.jar", p.name.replace(' ', "_"));
+                let file_exists = plugins_dir.join(&cs3_name).exists() || plugins_dir.join(&jar_name).exists();
+
+                let already_installed = installed.iter().any(|inst| {
+                    inst.name.eq_ignore_ascii_case(&p.name)
+                        || p.internal_name.as_ref().map_or(false, |int| inst.name.eq_ignore_ascii_case(int))
+                });
+
+                !already_installed && !file_exists
+            })
+            .collect();
+
+        if !missing.is_empty() {
+            println!(
+                "[DefaultRepo] Found {} uninstalled extensions for '{}'. Auto-installing in parallel...",
+                missing.len(),
+                DEFAULT_REPO_NAME
+            );
+
+            let mut join_set = tokio::task::JoinSet::new();
+            for p in missing {
+                let pm = plugin_manager.clone();
+                join_set.spawn(async move {
+                    let name = p.name.clone();
+                    match pm.install_plugin(&p).await {
+                        Ok(_) => {
+                            println!("[DefaultRepo] Auto-installed extension: '{}'", name);
+                            true
+                        }
+                        Err(err) => {
+                            eprintln!("[DefaultRepo] Failed to auto-install extension '{}': {}", name, err);
+                            false
+                        }
+                    }
+                });
+            }
+
+            let mut newly_installed = 0;
+            while let Some(res) = join_set.join_next().await {
+                if let Ok(true) = res {
+                    newly_installed += 1;
+                }
+            }
+
+            if newly_installed > 0 {
+                println!(
+                    "[DefaultRepo] Successfully auto-installed {} extensions. Reloading engine...",
+                    newly_installed
+                );
+                let _ = engine.reload().await;
+                let _ = app_handle.emit("extensions-updated", ());
+                let _ = app_handle.emit("default-repo-synced", ());
+                let _ = app_handle.emit("engine-ready", ());
+            } else {
+                let _ = app_handle.emit("default-repo-synced", ());
+            }
+        } else {
+            println!("[DefaultRepo] All extensions for '{}' are already installed.", DEFAULT_REPO_NAME);
+            let _ = app_handle.emit("default-repo-synced", ());
+        }
+    }
+
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn ensure_default_repository(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<RepositoryEntry, String> {
+    ensure_default_repository_and_plugins(&state.db, &state.plugin_manager, &state.engine, &app).await
+}
+
 #[tauri::command]
 async fn get_repositories(state: State<'_, AppState>) -> Result<Vec<RepositoryEntry>, String> {
     state.db.get_repositories().map_err(|e| e.to_string())
@@ -1070,14 +1241,18 @@ async fn add_repository(url: String, name: Option<String>, state: State<'_, AppS
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
+    let is_default = url.trim().eq_ignore_ascii_case(DEFAULT_REPO_URL)
+        || url.contains("nehalDIU/nehal-CloudStream")
+        || url.contains("nehal-CloudStream");
 
     let entry = RepositoryEntry {
         name: repo_name,
         url: manifest.url.clone(),
-        icon_url: None,
+        icon_url: if is_default { Some(DEFAULT_REPO_ICON.to_string()) } else { None },
         manifest_version: manifest.manifest_version,
         plugin_count: manifest.plugins.len(),
         added_at: now,
+        is_default: Some(is_default),
     };
 
     let manifest_json = serde_json::to_string(&manifest).unwrap_or_default();
@@ -1148,6 +1323,13 @@ async fn delete_repository(
     delete_plugins: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    if url.trim().eq_ignore_ascii_case(DEFAULT_REPO_URL)
+        || url.contains("nehalDIU/nehal-CloudStream")
+        || url.contains("nehal-CloudStream")
+    {
+        return Err("Cannot delete the default repository. It is protected.".to_string());
+    }
+
     let should_delete_plugins = delete_plugins.unwrap_or(true);
 
     if should_delete_plugins {
@@ -1184,14 +1366,42 @@ async fn delete_repository(
 async fn delete_all_repositories(
     delete_plugins: Option<bool>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let should_delete_plugins = delete_plugins.unwrap_or(true);
 
     if should_delete_plugins {
-        let _ = uninstall_all_plugins_safely(&state).await;
+        let installed = state.plugin_manager.list_installed_plugins().unwrap_or_default();
+        let default_manifest = state
+            .db
+            .get_repository_manifest_json(DEFAULT_REPO_URL)
+            .ok()
+            .flatten()
+            .and_then(|j| serde_json::from_str::<RepositoryManifest>(&j).ok());
+
+        let default_plugin_names: std::collections::HashSet<String> = default_manifest
+            .map(|m| m.plugins.into_iter().map(|p| p.name.to_lowercase()).collect())
+            .unwrap_or_default();
+
+        let non_default_names: Vec<String> = installed
+            .into_iter()
+            .filter(|p| !default_plugin_names.contains(&p.name.to_lowercase()))
+            .map(|p| p.name)
+            .collect();
+
+        let _ = delete_plugins_safely(&non_default_names, &state).await;
     }
 
-    state.db.delete_all_repositories().map_err(|e| e.to_string())?;
+    let repos = state.db.get_repositories().unwrap_or_default();
+    for r in repos {
+        if !r.url.trim().eq_ignore_ascii_case(DEFAULT_REPO_URL) && !r.url.contains("nehalDIU/nehal-CloudStream") {
+            let _ = state.db.delete_repository(&r.url);
+        }
+    }
+
+    // Re-verify default repository and its plugins
+    let _ = ensure_default_repository_and_plugins(&state.db, &state.plugin_manager, &state.engine, &app).await;
+
     let _ = state.engine.reload().await;
     Ok(())
 }
@@ -1230,13 +1440,17 @@ async fn sync_repositories(state: State<'_, AppState>) -> Result<Vec<RepositoryE
     let repos = state.db.get_repositories().map_err(|e| e.to_string())?;
     for repo in &repos {
         if let Ok(manifest) = state.plugin_manager.fetch_repository(&repo.url).await {
+            let is_default = repo.url.trim().eq_ignore_ascii_case(DEFAULT_REPO_URL)
+                || repo.url.contains("nehalDIU/nehal-CloudStream")
+                || repo.url.contains("nehal-CloudStream");
             let entry = RepositoryEntry {
                 name: manifest.name.clone(),
                 url: repo.url.clone(),
-                icon_url: repo.icon_url.clone(),
+                icon_url: if is_default { Some(DEFAULT_REPO_ICON.to_string()) } else { repo.icon_url.clone() },
                 manifest_version: manifest.manifest_version,
                 plugin_count: manifest.plugins.len(),
                 added_at: repo.added_at,
+                is_default: Some(is_default),
             };
             let manifest_json = serde_json::to_string(&manifest).unwrap_or_default();
             let _ = state.db.save_repository(&entry, &manifest_json);
@@ -1763,10 +1977,10 @@ pub fn run() {
             let plugin_manager = Arc::new(PluginManager::new(app_data_dir.clone()));
             let engine = Arc::new(EngineClient::new(None, Some(plugin_manager.plugins_dir().clone())));
             
-            // Launch background check to ensure .cs3 headless engine is running.
-            // After the engine is fully ready (providers loaded), emit 'engine-ready'
-            // so the frontend can reload the home catalog without a manual refresh.
+            // Launch background check to ensure .cs3 headless engine is running and default repo is installed.
             let engine_init = engine.clone();
+            let db_init = db.clone();
+            let plugin_manager_init = plugin_manager.clone();
             let app_handle_for_engine = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let ok = engine_init.ensure_running().await;
@@ -1779,6 +1993,23 @@ pub fn run() {
                     eprintln!("[EngineClient] Engine offline/error: {:?}", status);
                     let _ = app_handle_for_engine.emit("engine-error", &status);
                     let _ = app_handle_for_engine.emit("engine-status-changed", &status);
+                }
+
+                // Automatically ensure default repository and auto-install all 21 extensions
+                match ensure_default_repository_and_plugins(
+                    &db_init,
+                    &plugin_manager_init,
+                    &engine_init,
+                    &app_handle_for_engine,
+                )
+                .await
+                {
+                    Ok(entry) => {
+                        println!("[DefaultRepo] Default repository initialized: {}", entry.name);
+                    }
+                    Err(e) => {
+                        eprintln!("[DefaultRepo] Error ensuring default repository: {}", e);
+                    }
                 }
             });
 
@@ -1855,6 +2086,7 @@ pub fn run() {
             set_watchlist_item,
             remove_watchlist_item,
             get_repositories,
+            ensure_default_repository,
             add_repository,
             delete_repository,
             delete_all_repositories,

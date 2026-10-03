@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { PluginManifest, RepositoryEntry, RepositoryManifest } from '../types';
 import { getLanguageMetadata } from '../utils/subtitleHelper';
 import {
   ALL_CLOUDSTREAM_REPOSITORIES,
+  isDefaultRepository,
 } from '../data/cloudstreamRepositories';
 import {
   Download,
@@ -32,6 +34,7 @@ import {
   Compass,
   MessageSquare,
   AlertCircle,
+  ShieldCheck,
 } from 'lucide-react';
 import { trackScreen } from '../utils/openpulse';
 
@@ -162,7 +165,15 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
   const loadRepositories = async () => {
     setLoadingRepos(true);
     try {
-      const list: RepositoryEntry[] = await invoke('get_repositories');
+      let list: RepositoryEntry[] = await invoke('get_repositories');
+      if (!list.some((r) => isDefaultRepository(r.url) || r.is_default)) {
+        try {
+          await invoke('ensure_default_repository');
+          list = await invoke('get_repositories');
+        } catch (err) {
+          console.warn('Failed to ensure default repository:', err);
+        }
+      }
       setRepositories(list);
     } catch (e) {
       console.error('Failed to load repositories:', e);
@@ -200,10 +211,27 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
     }
   };
 
-  // Initial Boot
+  // Initial Boot & Real-time Auto-install listeners
   useEffect(() => {
     loadRepositories();
     loadInstalled();
+
+    const unlistenSync = listen('default-repo-synced', () => {
+      loadRepositories();
+      loadInstalled();
+      onExtensionsChanged?.();
+    });
+
+    const unlistenExts = listen('extensions-updated', () => {
+      loadInstalled();
+      loadRepositories();
+      onExtensionsChanged?.();
+    });
+
+    return () => {
+      unlistenSync.then((f) => f());
+      unlistenExts.then((f) => f());
+    };
   }, []);
 
   // When repositories load, pre-fetch plugins for first repository
@@ -302,6 +330,10 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
   // Delete Repository with confirmation
   const handleDeleteRepo = async (repo: RepositoryEntry, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isDefaultRepository(repo.url) || repo.is_default) {
+      alert(`"${repo.name}" is the default repository and cannot be removed.`);
+      return;
+    }
     if (!window.confirm(`Are you sure you want to delete repository "${repo.name}"? All extensions from this repository will also be uninstalled.`)) {
       return;
     }
@@ -320,16 +352,20 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
     }
   };
 
-  // Delete all repositories
+  // Delete all repositories (preserves default repo)
   const handleDeleteAllRepos = async () => {
-    if (repositories.length === 0) return;
-    if (!window.confirm(`Are you sure you want to remove all ${repositories.length} repositories and uninstall all their extensions?`)) return;
+    const customRepos = repositories.filter((r) => !isDefaultRepository(r.url) && !r.is_default);
+    if (customRepos.length === 0) {
+      alert('Only the default repository is currently active, which cannot be removed.');
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to remove all ${customRepos.length} custom repositories? The default repository will remain.`)) return;
     try {
       await invoke('delete_all_repositories', { deletePlugins: true });
       setSelectedRepo(null);
       await loadRepositories();
       await loadInstalled();
-      setMessage('All repositories and extensions removed.');
+      setMessage('Custom repositories removed. Default repository preserved.');
       onExtensionsChanged?.();
     } catch (e) {
       console.error('Failed to remove all repositories:', e);
@@ -917,6 +953,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                 {repositories.map((repo) => {
                   const isSelected = selectedRepo?.url === repo.url;
                   const count = (repoPluginsMap[repo.url] || []).length || repo.plugin_count || 0;
+                  const isDefault = isDefaultRepository(repo.url) || repo.is_default;
                   return (
                     <button
                       key={repo.url}
@@ -952,18 +989,36 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                           e.currentTarget.style.background = 'transparent';
                         }
                       }}
-                      title={repo.name}
+                      title={repo.name + (isDefault ? ' (Default Repository)' : '')}
                     >
-                      <span
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          maxWidth: '140px',
-                        }}
-                      >
-                        {repo.name.split(' ')[0]}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                        {isDefault && (
+                          <span
+                            style={{
+                              fontSize: '8.5px',
+                              fontWeight: 800,
+                              color: '#a78bfa',
+                              background: 'rgba(167, 139, 250, 0.15)',
+                              padding: '1px 5px',
+                              borderRadius: '4px',
+                              letterSpacing: '0.5px',
+                              flexShrink: 0,
+                            }}
+                          >
+                            DEF
+                          </span>
+                        )}
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: isDefault ? '110px' : '140px',
+                          }}
+                        >
+                          {repo.name.split(' ')[0]}
+                        </span>
+                      </div>
                       {count > 0 && (
                         <span style={{ fontSize: '10.5px', color: '#555175' }}>
                           {count}
@@ -1105,9 +1160,32 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                   <span>Back to Repositories</span>
                 </button>
 
-                <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', margin: 0 }}>
-                  {selectedRepo.name}
-                </h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', margin: 0 }}>
+                    {selectedRepo.name}
+                  </h1>
+                  {(isDefaultRepository(selectedRepo.url) || selectedRepo.is_default) && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '3px 9px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        letterSpacing: '0.6px',
+                        background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25))',
+                        color: '#c4b5fd',
+                        border: '1px solid rgba(168, 85, 247, 0.4)',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <ShieldCheck size={12} color="#a78bfa" />
+                      Default Repository
+                    </span>
+                  )}
+                </div>
                 <span
                   style={{
                     fontSize: '11px',
@@ -1144,25 +1222,45 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                   Refresh
                 </button>
 
-                <button
-                  className="btn-primary"
-                  onClick={() => handleInstallAllInRepo(currentRepoPlugins)}
-                  disabled={installingAll || currentRepoPlugins.length === 0}
-                  style={{
-                    padding: '8px 18px',
-                    fontSize: '12.5px',
-                    fontWeight: 700,
-                    borderRadius: '9999px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  <CheckCheck size={15} />
-                  {installingAll
-                    ? `Installing (${installProgress?.current || 0}/${installProgress?.total || 0})...`
-                    : `Install All (${currentRepoPlugins.length})`}
-                </button>
+                {currentRepoPlugins.length > 0 && currentRepoPlugins.every((p) => isInstalled(p.name)) ? (
+                  <div
+                    style={{
+                      padding: '8px 18px',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      borderRadius: '9999px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'rgba(52, 211, 153, 0.15)',
+                      color: '#34d399',
+                      border: '1px solid rgba(52, 211, 153, 0.3)',
+                    }}
+                  >
+                    <CheckCircle size={15} />
+                    All Installed ({currentRepoPlugins.length})
+                  </div>
+                ) : (
+                  <button
+                    className="btn-primary"
+                    onClick={() => handleInstallAllInRepo(currentRepoPlugins)}
+                    disabled={installingAll || currentRepoPlugins.length === 0}
+                    style={{
+                      padding: '8px 18px',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      borderRadius: '9999px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <CheckCheck size={15} />
+                    {installingAll
+                      ? `Installing (${installProgress?.current || 0}/${installProgress?.total || 0})...`
+                      : `Install All (${currentRepoPlugins.length})`}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1651,7 +1749,25 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                                 </div>
                               </div>
 
-                              {added ? (
+                              {repo.isDefault || isDefaultRepository(repo.directInstall) ? (
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    color: '#c4b5fd',
+                                    background: 'rgba(124, 58, 237, 0.2)',
+                                    padding: '2px 8px',
+                                    borderRadius: '9999px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    border: '1px solid rgba(168, 85, 247, 0.35)',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <ShieldCheck size={11} color="#a78bfa" /> DEFAULT
+                                </span>
+                              ) : added ? (
                                 <span
                                   style={{
                                     fontSize: '10px',
@@ -2495,6 +2611,7 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
               >
                 {repositories.map((repo) => {
                   const pluginsInRepo = repoPluginsMap[repo.url] || [];
+                  const isDefault = isDefaultRepository(repo.url) || repo.is_default;
                   return (
                     <div
                       key={repo.url}
@@ -2548,18 +2665,37 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                             </div>
                           </div>
 
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              color: '#34d399',
-                              background: 'rgba(16, 185, 129, 0.12)',
-                              padding: '2px 8px',
-                              borderRadius: '9999px',
-                            }}
-                          >
-                            ACTIVE
-                          </span>
+                          {isDefault ? (
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                color: '#c4b5fd',
+                                background: 'rgba(124, 58, 237, 0.2)',
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                border: '1px solid rgba(168, 85, 247, 0.35)',
+                              }}
+                            >
+                              <ShieldCheck size={11} color="#a78bfa" /> DEFAULT
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                color: '#34d399',
+                                background: 'rgba(16, 185, 129, 0.12)',
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                              }}
+                            >
+                              ACTIVE
+                            </span>
+                          )}
                         </div>
 
                         <div
@@ -2618,22 +2754,38 @@ export const PluginsScreen: React.FC<PluginsScreenProps> = ({ onExtensionsChange
                             <Copy size={14} />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteRepo(repo, e)}
-                            title="Delete repository"
-                            style={{
-                              background: 'rgba(244, 63, 94, 0.1)',
-                              border: 'none',
-                              color: '#f43f5e',
-                              padding: '6px',
-                              borderRadius: '8px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {isDefault ? (
+                            <div
+                              title="Default repository is protected and cannot be deleted"
+                              style={{
+                                background: 'rgba(99, 102, 241, 0.12)',
+                                color: '#a78bfa',
+                                padding: '6px',
+                                borderRadius: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <ShieldCheck size={14} />
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteRepo(repo, e)}
+                              title="Delete repository"
+                              style={{
+                                background: 'rgba(244, 63, 94, 0.1)',
+                                border: 'none',
+                                color: '#f43f5e',
+                                padding: '6px',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
